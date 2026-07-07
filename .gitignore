@@ -174,3 +174,11 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+
+# ---> reddit-research project
+# Secrets and local config (never commit)
+.env
+reddit-research.toml
+
+# Local SQLite cache
+*.sqlite

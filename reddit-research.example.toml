@@ -1,0 +1,21 @@
+# Non-secret defaults. Secrets belong in the environment, never here.
+# Copy to reddit-research.toml (cwd) or ~/.config/reddit-research/config.toml.
+
+[search]
+provider = "brave"        # "brave" or "tavily"
+default_limit = 10
+# recency_days = 365       # optional default recency window
+
+[reddit]
+max_comments_per_thread = 300
+comment_sort = "top"      # top | best | new | controversial | old
+user_agent = "reddit-research personal tool by u/USERNAME"
+
+[cache]
+path = "~/.cache/reddit-research/reddit-research.sqlite"
+search_ttl_days = 7
+thread_ttl_days = 30
+
+[synth]
+# provider = "anthropic"  # leave unset to return evidence only
+# model = "claude-sonnet-5"
