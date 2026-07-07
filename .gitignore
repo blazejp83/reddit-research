@@ -182,3 +182,6 @@ reddit-research.toml
 
 # Local SQLite cache
 *.sqlite
+
+# Windows/WSL alternate-data-stream artifacts
+*:Zone.Identifier
