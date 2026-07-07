@@ -6,6 +6,10 @@
 #
 services:
   reddit-research-mcp:
+    # Pull the prebuilt image from the private registry (on the NAS, run
+    # `docker compose pull && docker compose up -d` — no source checkout needed).
+    # `build: .` lets you rebuild locally with `docker compose build`.
+    image: registry.bpds1621.synology.me/reddit-research-mcp:latest
     build: .
     container_name: reddit-research-mcp
     restart: unless-stopped

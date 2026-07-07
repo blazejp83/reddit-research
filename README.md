@@ -114,11 +114,22 @@ The included `Dockerfile` + `docker-compose.yml` run the MCP server over HTTP.
    # ANTHROPIC_API_KEY=...                  # only if you enable synthesis
    ```
 
-2. **Run**:
+2. **Run** — pull the prebuilt image from the private registry (or `--build` to
+   build locally):
 
    ```bash
-   docker compose up -d --build
-   curl http://127.0.0.1:8000/healthz       # -> ok
+   docker login registry.bpds1621.synology.me   # once
+   docker compose pull && docker compose up -d   # deploy from registry
+   # or, to build from source instead: docker compose up -d --build
+   curl http://127.0.0.1:8000/healthz            # -> ok
+   ```
+
+   To publish a new image after code changes:
+
+   ```bash
+   docker build --provenance=false \
+     -t registry.bpds1621.synology.me/reddit-research-mcp:latest .
+   docker push registry.bpds1621.synology.me/reddit-research-mcp:latest
    ```
 
    The SQLite cache persists in `./data`. The container binds to `127.0.0.1:8000`
