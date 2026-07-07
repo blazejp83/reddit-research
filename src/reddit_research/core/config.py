@@ -117,11 +117,13 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
     )
 
     reddit = RedditConfig(
-        client_id=env.get("REDDIT_CLIENT_ID") or reddit_tbl.get("client_id"),
-        client_secret=env.get("REDDIT_CLIENT_SECRET") or reddit_tbl.get("client_secret"),
-        username=env.get("REDDIT_USERNAME") or reddit_tbl.get("username"),
-        password=env.get("REDDIT_PASSWORD") or reddit_tbl.get("password"),
-        refresh_token=env.get("REDDIT_REFRESH_TOKEN") or reddit_tbl.get("refresh_token"),
+        # Secrets: environment only, never the TOML file.
+        client_id=env.get("REDDIT_CLIENT_ID"),
+        client_secret=env.get("REDDIT_CLIENT_SECRET"),
+        username=env.get("REDDIT_USERNAME"),
+        password=env.get("REDDIT_PASSWORD"),
+        refresh_token=env.get("REDDIT_REFRESH_TOKEN"),
+        # Non-secret behavior: TOML is the home; env var is an optional override.
         user_agent=env.get("REDDIT_USER_AGENT")
         or reddit_tbl.get("user_agent", DEFAULT_USER_AGENT),
         max_comments_per_thread=int(reddit_tbl.get("max_comments_per_thread", 300)),

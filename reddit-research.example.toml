@@ -1,4 +1,5 @@
-# Non-secret defaults. Secrets belong in the environment, never here.
+# Home for all non-secret behavior config. Secrets (API keys, Reddit password/
+# tokens) belong in the environment / .env, never here — see .env.example.
 # Copy to reddit-research.toml (cwd) or ~/.config/reddit-research/config.toml.
 
 [search]

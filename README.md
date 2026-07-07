@@ -21,21 +21,24 @@ uv sync --extra dev     # + test tooling
 
 ## Configure
 
-Credentials come from the environment only (never the config file). Copy
-`.env.example` and fill in what you have:
+Configuration splits cleanly in two:
 
-```bash
-# Reddit access — only needed for the "praw" backend (see Fetch backends below)
-REDDIT_CLIENT_ID=...
-REDDIT_CLIENT_SECRET=...
-REDDIT_USER_AGENT="reddit-research personal tool by u/you"
-BRAVE_SEARCH_API_KEY=...          # or TAVILY_API_KEY (search always needs a key)
-# Optional synthesis:
-REDDIT_RESEARCH_SYNTH_PROVIDER=anthropic
-ANTHROPIC_API_KEY=...
-```
+- **Secrets → environment / `.env`** (never the TOML). Copy `.env.example`:
 
-Non-secret defaults can live in `reddit-research.toml` (see `reddit-research.example.toml`).
+  ```bash
+  # Reddit creds — only for the "praw" backend (see Fetch backends below)
+  REDDIT_CLIENT_ID=...
+  REDDIT_CLIENT_SECRET=...
+  BRAVE_SEARCH_API_KEY=...        # or TAVILY_API_KEY (search always needs a key)
+  ANTHROPIC_API_KEY=...           # only if you enable synthesis
+  ```
+
+- **Non-secret behavior → `reddit-research.toml`** (see `reddit-research.example.toml`):
+  `backend`, `user_agent`, search/synth `provider`, comment limits, cache TTLs, etc.
+
+Precedence is `env var > TOML > default`, so any TOML value can be overridden by
+its env var when needed — but each setting has one canonical home to avoid
+duplication.
 
 ## Fetch backends
 
