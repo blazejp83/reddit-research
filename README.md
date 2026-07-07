@@ -36,9 +36,10 @@ Configuration splits cleanly in two:
 - **Non-secret behavior → `reddit-research.toml`** (see `reddit-research.example.toml`):
   `backend`, `user_agent`, search/synth `provider`, comment limits, cache TTLs, etc.
 
-Precedence is `env var > TOML > default`, so any TOML value can be overridden by
-its env var when needed — but each setting has one canonical home to avoid
-duplication.
+A `.env` in the current directory (or `~/.config/reddit-research/.env`) is loaded
+automatically. Precedence is `real env var > .env file > TOML > default`, so any
+TOML value can be overridden by its env var when needed — but each setting has
+one canonical home to avoid duplication.
 
 ## Fetch backends
 

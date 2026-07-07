@@ -1,8 +1,8 @@
 """Configuration loading from environment variables and an optional TOML file.
 
-Precedence (highest first): explicit kwargs -> environment variables -> TOML
-config file -> built-in defaults. Secrets only ever come from the environment;
-they are never read from or written to the TOML file.
+Precedence (highest first): real environment variables -> ``.env`` file -> TOML
+config file -> built-in defaults. Secrets only ever come from the environment
+(directly or via ``.env``); they are never read from or written to the TOML file.
 """
 
 from __future__ import annotations
@@ -13,6 +13,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from platformdirs import user_cache_dir
+
+# Locations checked for a ``.env`` file (most specific first). A real env var
+# already set in the process always wins over any file value.
+DOTENV_SEARCH_PATHS = [
+    Path.cwd() / ".env",
+    Path.home() / ".config" / "reddit-research" / ".env",
+]
 
 DEFAULT_CACHE_DIR = Path(user_cache_dir("reddit-research"))
 DEFAULT_CACHE_PATH = DEFAULT_CACHE_DIR / "reddit-research.sqlite"
@@ -28,6 +35,23 @@ CONFIG_SEARCH_PATHS = [
 
 def _expand(path: str | os.PathLike[str]) -> Path:
     return Path(os.path.expanduser(str(path))).expanduser()
+
+
+def _load_dotenv_files() -> None:
+    """Populate ``os.environ`` from ``.env`` files without overriding real vars.
+
+    Files are loaded most-specific first with ``override=False``, so a cwd
+    ``.env`` wins over the global one, and any variable already exported in the
+    real environment wins over both. No-op if python-dotenv isn't installed.
+    """
+
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - dotenv is a declared dependency
+        return
+    for path in DOTENV_SEARCH_PATHS:
+        if path.is_file():
+            load_dotenv(path, override=False)
 
 
 @dataclass
@@ -102,6 +126,7 @@ def _load_toml(path: Path | None) -> dict:
 def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
     """Build a :class:`Config` from a TOML file plus environment overrides."""
 
+    _load_dotenv_files()
     data = _load_toml(Path(config_path) if config_path else None)
     search_tbl = data.get("search", {})
     reddit_tbl = data.get("reddit", {})
