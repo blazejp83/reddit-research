@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from .config import RedditConfig
 from .errors import RedditError
+from .fetch_base import Fetcher
 from .models import Comment, Thread
 from .urls import RedditRef, parse_ref
 
@@ -23,8 +24,10 @@ REDDIT_BASE = "https://www.reddit.com"
 _REMOVED_BODIES = {"[deleted]", "[removed]", ""}
 
 
-class RedditFetcher:
+class RedditFetcher(Fetcher):
     """Wraps a PRAW ``Reddit`` client and normalizes fetched threads."""
+
+    name = "praw"
 
     def __init__(self, config: RedditConfig, client: "praw.Reddit | None" = None) -> None:
         self.config = config

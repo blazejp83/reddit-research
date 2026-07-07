@@ -25,16 +25,40 @@ Credentials come from the environment only (never the config file). Copy
 `.env.example` and fill in what you have:
 
 ```bash
+# Reddit access — only needed for the "praw" backend (see Fetch backends below)
 REDDIT_CLIENT_ID=...
 REDDIT_CLIENT_SECRET=...
 REDDIT_USER_AGENT="reddit-research personal tool by u/you"
-BRAVE_SEARCH_API_KEY=...          # or TAVILY_API_KEY
+BRAVE_SEARCH_API_KEY=...          # or TAVILY_API_KEY (search always needs a key)
 # Optional synthesis:
 REDDIT_RESEARCH_SYNTH_PROVIDER=anthropic
 ANTHROPIC_API_KEY=...
 ```
 
 Non-secret defaults can live in `reddit-research.toml` (see `reddit-research.example.toml`).
+
+## Fetch backends
+
+Reddit gated self-serve API app creation in 2026 (the "Responsible Builder
+Policy"), so an approved OAuth app is no longer guaranteed. The fetcher therefore
+supports several backends, selectable per-command with `--backend` or via
+`[reddit] backend` / `REDDIT_RESEARCH_BACKEND`:
+
+| Backend | Auth | Notes |
+| --- | --- | --- |
+| `auto` (default) | — | `praw` if Reddit creds are set, else `json` |
+| `praw` | Reddit OAuth app | Official API; full comment-tree expansion. Needs an approved app. |
+| `json` | none | Reddit's public `.json` endpoints. Works from **residential** IPs at low volume; Reddit 403s most datacenter/cloud IPs and caps ~30 req/min. Deep "load more" branches aren't expandable without OAuth (thread is marked truncated). |
+| `arctic` | none | [Arctic Shift](https://arctic-shift.photon-reddit.com/) archive with [PullPush](https://pullpush.io/) fallback. Works from any IP; serves periodically-updated historical data, so very recent threads may be missing. Retains deleted/removed content. |
+
+```bash
+reddit-research fetch    <url> --backend json      # keyless, residential IP
+reddit-research evidence "..." --backend arctic    # keyless, any IP
+```
+
+Compliance note: `json`/`arctic` let you run without an approved app, but using
+them to sidestep API approval sits in tension with the spec's "don't circumvent
+access controls" non-goal. Intended for genuine personal, low-volume use.
 
 ## CLI
 
@@ -89,6 +113,9 @@ Package layout under `src/reddit_research/`:
 | `core/models.py` | Pydantic data contracts |
 | `core/search.py` | Query planner + Brave/Tavily providers |
 | `core/reddit.py` | PRAW fetcher + normalization |
+| `core/public_json.py` | Keyless `.json` fetcher |
+| `core/archive.py` | Arctic Shift / PullPush fetcher |
+| `core/fetchers.py` | Backend selection (`auto`/`praw`/`json`/`arctic`) |
 | `core/urls.py` | Reddit URL/ID parsing |
 | `core/cache.py` | SQLite cache (TTL + purge) |
 | `core/ranking.py` | Explainable lexical ranking |
@@ -105,6 +132,6 @@ uv run pytest
 ## Status
 
 MVP implemented: `search`/`fetch`/`evidence`/`answer` CLI, Brave + Tavily
-providers, PRAW fetcher, SQLite cache, lexical ranking, JSON/Markdown output,
-and the MCP server. Later enhancements (async fetching, semantic reranking,
-branch summarization) are tracked in the spec.
+providers, three fetch backends (`praw`/`json`/`arctic`), SQLite cache, lexical
+ranking, JSON/Markdown output, and the MCP server. Later enhancements (async
+fetching, semantic reranking, branch summarization) are tracked in the spec.

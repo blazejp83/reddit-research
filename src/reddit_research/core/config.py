@@ -47,6 +47,8 @@ class RedditConfig:
     user_agent: str = DEFAULT_USER_AGENT
     max_comments_per_thread: int = 300
     comment_sort: str = "top"
+    # Fetch backend: auto | praw | json | arctic (see core.fetchers).
+    backend: str = "auto"
 
 
 @dataclass
@@ -124,6 +126,7 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
         or reddit_tbl.get("user_agent", DEFAULT_USER_AGENT),
         max_comments_per_thread=int(reddit_tbl.get("max_comments_per_thread", 300)),
         comment_sort=reddit_tbl.get("comment_sort", "top"),
+        backend=env.get("REDDIT_RESEARCH_BACKEND") or reddit_tbl.get("backend", "auto"),
     )
 
     cache_path = env.get("REDDIT_RESEARCH_CACHE") or cache_tbl.get("path", DEFAULT_CACHE_PATH)

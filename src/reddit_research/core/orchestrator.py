@@ -10,6 +10,8 @@ from __future__ import annotations
 from .cache import Cache
 from .config import Config
 from . import errors
+from .fetch_base import Fetcher
+from .fetchers import get_fetcher
 from .models import (
     AnswerResult,
     EvidenceResult,
@@ -18,7 +20,6 @@ from .models import (
     Thread,
 )
 from . import ranking
-from .reddit import RedditFetcher
 from .search import get_provider, plan_queries, query_key
 from .synth import synthesize
 from .urls import parse_ref
@@ -29,7 +30,7 @@ class Orchestrator:
         self,
         config: Config,
         cache: Cache | None = None,
-        fetcher: RedditFetcher | None = None,
+        fetcher: Fetcher | None = None,
         provider=None,
     ) -> None:
         self.config = config
@@ -50,9 +51,9 @@ class Orchestrator:
         return self._provider
 
     @property
-    def fetcher(self) -> RedditFetcher:
+    def fetcher(self) -> Fetcher:
         if self._fetcher is None:
-            self._fetcher = RedditFetcher(self.config.reddit)
+            self._fetcher = get_fetcher(self.config.reddit.backend, self.config)
         return self._fetcher
 
     # -- stages ------------------------------------------------------------

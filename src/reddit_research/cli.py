@@ -38,6 +38,13 @@ SubredditOpt = Annotated[
     Optional[list[str]],
     typer.Option("--subreddit", "-r", help="Restrict to subreddit(s); repeatable."),
 ]
+BackendOpt = Annotated[
+    Optional[str],
+    typer.Option(
+        "--backend",
+        help="Fetch backend: auto | praw | json | arctic. Overrides config.",
+    ),
+]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Verbose logging.")]
 DebugOpt = Annotated[bool, typer.Option("--debug", help="Debug logging (implies verbose).")]
 ShowQueriesOpt = Annotated[bool, typer.Option("--show-queries", help="Print planned search queries.")]
@@ -60,8 +67,11 @@ def _emit_meta(meta, verbose: bool, show_queries: bool) -> None:
         _err(w)
 
 
-def _make_orchestrator(config_path: str | None) -> Orchestrator:
-    return Orchestrator(load_config(config_path))
+def _make_orchestrator(config_path: str | None, backend: str | None = None) -> Orchestrator:
+    cfg = load_config(config_path)
+    if backend:
+        cfg.reddit.backend = backend
+    return Orchestrator(cfg)
 
 
 # -- commands ---------------------------------------------------------------
@@ -98,6 +108,7 @@ def fetch(
     url_or_id: str,
     max_comments: Annotated[Optional[int], typer.Option("--max-comments", help="Comment cap.")] = None,
     sort: Annotated[str, typer.Option("--sort", help="Comment sort: top|best|new|controversial|old.")] = "top",
+    backend: BackendOpt = None,
     fmt: FormatOpt = "markdown",
     config: ConfigOpt = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Bypass the cache.")] = False,
@@ -105,7 +116,7 @@ def fetch(
 ) -> None:
     """Fetch and normalize one Reddit thread."""
 
-    orch = _make_orchestrator(config)
+    orch = _make_orchestrator(config, backend)
     try:
         meta = _new_meta()
         thread = orch.fetch(
@@ -133,6 +144,7 @@ def evidence(
     sort: Annotated[str, typer.Option("--sort", help="Comment sort.")] = "top",
     since_days: Annotated[Optional[int], typer.Option("--since-days")] = None,
     max_evidence: Annotated[int, typer.Option("--max-evidence", help="Max evidence items.")] = 25,
+    backend: BackendOpt = None,
     fmt: FormatOpt = "markdown",
     config: ConfigOpt = None,
     verbose: VerboseOpt = False,
@@ -140,7 +152,7 @@ def evidence(
 ) -> None:
     """Run search + fetch + ranking and emit structured evidence."""
 
-    orch = _make_orchestrator(config)
+    orch = _make_orchestrator(config, backend)
     try:
         result = orch.evidence(
             question,
@@ -170,6 +182,7 @@ def answer(
     since_days: Annotated[Optional[int], typer.Option("--since-days")] = None,
     max_evidence: Annotated[int, typer.Option("--max-evidence")] = 25,
     no_llm: Annotated[bool, typer.Option("--no-llm", help="Skip LLM synthesis.")] = False,
+    backend: BackendOpt = None,
     fmt: FormatOpt = "markdown",
     config: ConfigOpt = None,
     verbose: VerboseOpt = False,
@@ -177,7 +190,7 @@ def answer(
 ) -> None:
     """Run the full pipeline and optionally synthesize a cited answer."""
 
-    orch = _make_orchestrator(config)
+    orch = _make_orchestrator(config, backend)
     try:
         result = orch.answer(
             question,
