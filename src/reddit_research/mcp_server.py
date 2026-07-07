@@ -3,10 +3,18 @@
 Exposes the low-level tools (``search_reddit_threads``, ``fetch_reddit_thread``,
 ``rank_reddit_evidence``) plus the high-level ``answer_from_reddit`` orchestration
 tool. Requires the optional ``mcp`` dependency: ``uv pip install '.[mcp]'``.
+
+Transports (via ``REDDIT_RESEARCH_MCP_TRANSPORT``):
+- ``stdio`` (default) — local use; the client spawns this process.
+- ``http`` / ``streamable-http`` — long-lived network server for container/NAS
+  deployment. Bearer-token auth is enforced (``REDDIT_RESEARCH_MCP_TOKEN``); the
+  server refuses to start over HTTP without a token so it can't be exposed open.
 """
 
 from __future__ import annotations
 
+import hmac
+import os
 from typing import Any
 
 from .core import ranking
@@ -116,8 +124,77 @@ def answer_from_reddit(
         orch.close()
 
 
-def main() -> None:  # pragma: no cover - stdio entry
-    mcp.run()
+class BearerAuthMiddleware:
+    """Minimal ASGI middleware enforcing a static bearer token.
+
+    Defense-in-depth for internet-exposed deployments: even behind a reverse
+    proxy, the app itself rejects requests without ``Authorization: Bearer
+    <token>``. ``GET /healthz`` is left open for container health checks. Non-HTTP
+    scopes (lifespan/websocket) pass straight through to the wrapped app.
+    """
+
+    def __init__(self, app, token: str, health_path: str = "/healthz") -> None:
+        self.app = app
+        self.token = token
+        self.health_path = health_path
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if scope.get("path") == self.health_path:
+            await self._plain(send, 200, b"ok")
+            return
+        headers = dict(scope.get("headers") or [])
+        provided = headers.get(b"authorization", b"").decode()
+        if not hmac.compare_digest(provided, f"Bearer {self.token}"):
+            await self._plain(send, 401, b"unauthorized")
+            return
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _plain(send, status: int, body: bytes) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
+def _run_http() -> None:  # pragma: no cover - network entry
+    import uvicorn
+
+    token = os.environ.get("REDDIT_RESEARCH_MCP_TOKEN")
+    if not token:
+        raise SystemExit(
+            "REDDIT_RESEARCH_MCP_TOKEN must be set for HTTP transport. Refusing to "
+            "expose an unauthenticated MCP server that can spend your API keys."
+        )
+    host = os.environ.get("REDDIT_RESEARCH_MCP_HOST", "0.0.0.0")
+    port = int(os.environ.get("REDDIT_RESEARCH_MCP_PORT", "8000"))
+    mcp.settings.host = host
+    mcp.settings.port = port
+
+    app = BearerAuthMiddleware(mcp.streamable_http_app(), token)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=os.environ.get("REDDIT_RESEARCH_MCP_LOG_LEVEL", "info"),
+    )
+
+
+def main() -> None:  # pragma: no cover - entry point
+    transport = os.environ.get("REDDIT_RESEARCH_MCP_TRANSPORT", "stdio").lower()
+    if transport in ("http", "streamable-http", "streamable_http"):
+        _run_http()
+    elif transport == "sse":
+        mcp.run(transport="sse")
+    else:
+        mcp.run()  # stdio
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -81,25 +81,69 @@ Useful flags: `--subreddit/-r` (repeatable), `--limit-threads`, `--max-comments`
 
 ## MCP server
 
-```bash
-reddit-research-mcp        # serves over stdio
-```
-
 Exposes `search_reddit_threads`, `fetch_reddit_thread`, `rank_reddit_evidence`,
-and the high-level `answer_from_reddit`.
+and the high-level `answer_from_reddit`. Two transports (`REDDIT_RESEARCH_MCP_TRANSPORT`):
 
-Example MCP client config:
+**`stdio`** (default) — local use; the client spawns the process:
 
 ```json
 {
   "mcpServers": {
     "reddit-research": {
       "command": "reddit-research-mcp",
-      "env": { "REDDIT_CLIENT_ID": "...", "BRAVE_SEARCH_API_KEY": "..." }
+      "env": { "BRAVE_SEARCH_API_KEY": "..." }
     }
   }
 }
 ```
+
+**`http` / `streamable-http`** — a long-lived network server for container/NAS
+deployment (see below). A bearer token is **required**; the server refuses to
+start over HTTP without `REDDIT_RESEARCH_MCP_TOKEN`, and every request except
+`GET /healthz` must send `Authorization: Bearer <token>`.
+
+## Deploy on a NAS (Docker)
+
+The included `Dockerfile` + `docker-compose.yml` run the MCP server over HTTP.
+
+1. **Configure** — create `.env` next to the compose file:
+
+   ```bash
+   BRAVE_SEARCH_API_KEY=...                 # search needs a key
+   REDDIT_RESEARCH_MCP_TOKEN=$(openssl rand -hex 32)   # required bearer token
+   # ANTHROPIC_API_KEY=...                  # only if you enable synthesis
+   ```
+
+2. **Run**:
+
+   ```bash
+   docker compose up -d --build
+   curl http://127.0.0.1:8000/healthz       # -> ok
+   ```
+
+   The SQLite cache persists in `./data`. The container binds to `127.0.0.1:8000`
+   by default, so it's reachable only through the NAS's reverse proxy (change the
+   `ports:` mapping to `8000:8000` to expose it on the LAN instead).
+
+3. **Reverse proxy (Synology)** — Control Panel → Login Portal → Advanced →
+   Reverse Proxy → Create:
+   - Source: `https://reddit-mcp.<your-domain>` (port 443, HTTPS — enables TLS)
+   - Destination: `http://localhost:8000`
+   - Enable HSTS as desired; the streamable-HTTP transport streams responses, so
+     leave response buffering off (the default reverse-proxy behavior is fine).
+
+4. **Connect from Claude Code**:
+
+   ```bash
+   claude mcp add --transport http reddit-research \
+     https://reddit-mcp.<your-domain>/mcp \
+     --header "Authorization: Bearer <your REDDIT_RESEARCH_MCP_TOKEN>"
+   ```
+
+Security notes: the token gates outbound calls that spend your API keys, so keep
+it secret and prefer a random 32-byte value. Fetch backend defaults to `auto` →
+`json`; if the NAS gets `403`s from Reddit (some IPs are blocked), set
+`REDDIT_RESEARCH_BACKEND=arctic` in `.env` to use the keyless archive instead.
 
 ## Architecture
 

@@ -1,0 +1,26 @@
+# Keep the build context small and free of secrets/local state.
+.git
+.gitignore
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets and local config — injected at runtime, never baked into the image.
+.env
+.env.*
+reddit-research.toml
+*:Zone.Identifier
+
+# Local cache / persisted data
+*.sqlite
+data/
+
+# Tests and docs not needed at runtime
+tests/
+*.md
+!README.md
+reddit-research-mcp-cli-spec.md

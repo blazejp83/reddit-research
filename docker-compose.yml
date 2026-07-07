@@ -1,0 +1,37 @@
+# Deploy the reddit-research MCP server on a NAS (e.g. Synology Container Manager).
+#
+#   1. Fill in .env (BRAVE_SEARCH_API_KEY, REDDIT_RESEARCH_MCP_TOKEN, ...).
+#   2. docker compose up -d --build
+#   3. Point your Synology reverse proxy at 127.0.0.1:8000 (see README).
+#
+services:
+  reddit-research-mcp:
+    build: .
+    container_name: reddit-research-mcp
+    restart: unless-stopped
+
+    # Secrets come from .env (never baked into the image). At minimum:
+    #   BRAVE_SEARCH_API_KEY, REDDIT_RESEARCH_MCP_TOKEN
+    env_file:
+      - .env
+
+    environment:
+      REDDIT_RESEARCH_MCP_TRANSPORT: streamable-http
+      REDDIT_RESEARCH_MCP_HOST: 0.0.0.0
+      REDDIT_RESEARCH_MCP_PORT: "8000"
+      REDDIT_RESEARCH_CACHE: /data/reddit-research.sqlite
+      # Keyless public-JSON works from a residential IP; if the NAS gets 403s,
+      # set this to "arctic" for the archive backend instead.
+      REDDIT_RESEARCH_BACKEND: auto
+
+    # Bind to loopback so the container is reachable ONLY via the NAS's reverse
+    # proxy (which terminates TLS + is internet-facing). Change to "8000:8000"
+    # to expose it directly on the LAN instead.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    volumes:
+      # Persist the SQLite cache across restarts.
+      - ./data:/data
+      # Optional: non-secret config. Uncomment to manage settings via TOML.
+      # - ./reddit-research.toml:/app/reddit-research.toml:ro

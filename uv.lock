@@ -697,6 +697,7 @@ dev = [
 ]
 mcp = [
     { name = "mcp" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -712,6 +713,7 @@ requires-dist = [
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "rich", specifier = ">=13.7" },
     { name = "typer", specifier = ">=0.12" },
+    { name = "uvicorn", marker = "extra == 'mcp'", specifier = ">=0.30" },
 ]
 provides-extras = ["mcp", "dev"]
 
