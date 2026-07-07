@@ -164,6 +164,38 @@ class BearerAuthMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
+def _transport_security():
+    """Build DNS-rebinding (Host/Origin) settings for HTTP transport.
+
+    FastMCP's default only allows localhost Host headers, so a request arriving
+    through a reverse proxy (Host = your public domain) is rejected with 421.
+    Bearer-token auth is the real access gate here, so host validation is OFF by
+    default. Set ``REDDIT_RESEARCH_MCP_ALLOWED_HOSTS`` (comma-separated hostnames)
+    to instead enforce a strict allowlist, e.g. ``reddit.example.com``.
+    """
+
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    allowed = [
+        h.strip()
+        for h in os.environ.get("REDDIT_RESEARCH_MCP_ALLOWED_HOSTS", "").split(",")
+        if h.strip()
+    ]
+    if not allowed:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    hosts: list[str] = []
+    origins: list[str] = []
+    for h in allowed:
+        hosts += [h, f"{h}:*"]
+        origins += [f"https://{h}", f"https://{h}:*", f"http://{h}", f"http://{h}:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
+
+
 def _run_http() -> None:  # pragma: no cover - network entry
     import uvicorn
 
@@ -177,6 +209,7 @@ def _run_http() -> None:  # pragma: no cover - network entry
     port = int(os.environ.get("REDDIT_RESEARCH_MCP_PORT", "8000"))
     mcp.settings.host = host
     mcp.settings.port = port
+    mcp.settings.transport_security = _transport_security()
 
     app = BearerAuthMiddleware(mcp.streamable_http_app(), token)
     uvicorn.run(

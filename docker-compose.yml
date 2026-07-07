@@ -27,6 +27,10 @@ services:
       # Keyless public-JSON works from a residential IP; if the NAS gets 403s,
       # set this to "arctic" for the archive backend instead.
       REDDIT_RESEARCH_BACKEND: auto
+      # Host-header (DNS-rebinding) validation is OFF by default so the reverse
+      # proxy's public Host header is accepted. To enforce a strict allowlist
+      # instead, set your public hostname(s), comma-separated:
+      # REDDIT_RESEARCH_MCP_ALLOWED_HOSTS: reddit.bpds1621.synology.me
 
     # Bind to loopback so the container is reachable ONLY via the NAS's reverse
     # proxy (which terminates TLS + is internet-facing). Change to "8000:8000"
