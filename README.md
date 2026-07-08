@@ -50,17 +50,17 @@ supports several backends, selectable per-command with `--backend` or via
 
 | Backend | Auth | Notes |
 | --- | --- | --- |
-| `auto` (default) | — | `praw` if Reddit creds are set, else `json` |
-| `praw` | Reddit OAuth app | Official API; full comment-tree expansion. Needs an approved app. |
-| `json` | none | Reddit's public `.json` endpoints. Works from **residential** IPs at low volume; Reddit 403s most datacenter/cloud IPs and caps ~30 req/min. Deep "load more" branches aren't expandable without OAuth (thread is marked truncated). |
-| `arctic` | none | [Arctic Shift](https://arctic-shift.photon-reddit.com/) archive with [PullPush](https://pullpush.io/) fallback. Works from any IP; serves periodically-updated historical data, so very recent threads may be missing. Retains deleted/removed content. |
+| `auto` (default) | — | `praw` if Reddit creds are set, else `arctic` |
+| `arctic` (recommended keyless) | none | [Arctic Shift](https://arctic-shift.photon-reddit.com/) archive with [PullPush](https://pullpush.io/) fallback. Works from any IP/host. Serves periodically-updated historical data, so very recent threads may lag; retains deleted/removed content. |
+| `praw` | Reddit OAuth app | Official API; live data + full comment-tree expansion. Needs an approved app. |
+| `json` | none | Reddit's public `.json` endpoints. **Largely unusable in 2026**: Reddit fingerprint-blocks the `.json` path (403) for non-browser clients — even from a residential IP, and even with a matching browser User-Agent (it checks the TLS/HTTP2 fingerprint of a current browser). Kept for the rare environment where it still works. |
 
 ```bash
-reddit-research fetch    <url> --backend json      # keyless, residential IP
-reddit-research evidence "..." --backend arctic    # keyless, any IP
+reddit-research evidence "..."                 # auto -> arctic (keyless)
+reddit-research answer   "..." --backend praw  # live data, needs an approved app
 ```
 
-Compliance note: `json`/`arctic` let you run without an approved app, but using
+Compliance note: `arctic`/`json` let you run without an approved app, but using
 them to sidestep API approval sits in tension with the spec's "don't circumvent
 access controls" non-goal. Intended for genuine personal, low-volume use.
 
@@ -152,9 +152,10 @@ The included `Dockerfile` + `docker-compose.yml` run the MCP server over HTTP.
    ```
 
 Security notes: the token gates outbound calls that spend your API keys, so keep
-it secret and prefer a random 32-byte value. Fetch backend defaults to `auto` →
-`json`; if the NAS gets `403`s from Reddit (some IPs are blocked), set
-`REDDIT_RESEARCH_BACKEND=arctic` in `.env` to use the keyless archive instead.
+it secret and prefer a random 32-byte value. The compose file sets the keyless
+`arctic` backend (the public `.json` path is fingerprint-blocked by Reddit for
+non-browser clients — see Fetch backends). Switch to `praw` only if you have an
+approved OAuth app and set its credentials in `.env`.
 
 ## Architecture
 

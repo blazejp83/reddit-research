@@ -8,7 +8,7 @@ default_limit = 10
 # recency_days = 365       # optional default recency window
 
 [reddit]
-backend = "auto"          # auto | praw | json | arctic (see README "Fetch backends")
+backend = "auto"          # auto (praw if creds else arctic) | praw | json | arctic
 max_comments_per_thread = 300
 comment_sort = "top"      # top | best | new | controversial | old
 user_agent = "reddit-research personal tool by u/USERNAME"

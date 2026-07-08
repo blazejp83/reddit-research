@@ -8,11 +8,11 @@ from reddit_research.core.public_json import PublicJsonFetcher
 from reddit_research.core.reddit import RedditFetcher
 
 
-def test_auto_resolves_to_json_without_creds():
+def test_auto_resolves_to_arctic_without_creds():
     cfg = load_config()
     cfg.reddit.client_id = None
     cfg.reddit.client_secret = None
-    assert resolve_backend("auto", cfg) == "json"
+    assert resolve_backend("auto", cfg) == "arctic"
 
 
 def test_auto_resolves_to_praw_with_creds():

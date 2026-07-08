@@ -24,9 +24,10 @@ services:
       REDDIT_RESEARCH_MCP_HOST: 0.0.0.0
       REDDIT_RESEARCH_MCP_PORT: "8000"
       REDDIT_RESEARCH_CACHE: /data/reddit-research.sqlite
-      # Keyless public-JSON works from a residential IP; if the NAS gets 403s,
-      # set this to "arctic" for the archive backend instead.
-      REDDIT_RESEARCH_BACKEND: auto
+      # Keyless archive backend (Arctic Shift / PullPush). Default here because
+      # Reddit fingerprint-blocks the public .json path for non-browser clients,
+      # even from residential IPs. Set to "praw" only with an approved OAuth app.
+      REDDIT_RESEARCH_BACKEND: arctic
       # Host-header (DNS-rebinding) validation is OFF by default so the reverse
       # proxy's public Host header is accepted. To enforce a strict allowlist
       # instead, set your public hostname(s), comma-separated:

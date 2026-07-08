@@ -2,9 +2,11 @@
 
 Backends:
 - ``praw``   — official Reddit Data API via PRAW (needs an approved app).
-- ``json``   — keyless public ``.json`` endpoints (residential IP, low volume).
+- ``json``   — keyless public ``.json`` endpoints. Unreliable: Reddit fingerprint-
+  blocks the ``.json`` path (403) for non-browser clients, even from residential
+  IPs. Kept for the rare environment where it still works.
 - ``arctic`` — Arctic Shift / PullPush archives (keyless, works from any IP).
-- ``auto``   — ``praw`` when Reddit credentials are present, else ``json``.
+- ``auto``   — ``praw`` when Reddit credentials are present, else ``arctic``.
 """
 
 from __future__ import annotations
@@ -26,7 +28,9 @@ def resolve_backend(name: str, config: Config) -> str:
     reddit = config.reddit
     if reddit.client_id and reddit.client_secret:
         return "praw"
-    return "json"
+    # Default to the keyless archive backend: the public .json path is
+    # fingerprint-blocked by Reddit for non-browser clients (see json backend).
+    return "arctic"
 
 
 def get_fetcher(name: str, config: Config) -> Fetcher:
