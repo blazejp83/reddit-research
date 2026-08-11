@@ -6,10 +6,11 @@
 #
 services:
   reddit-research-mcp:
-    # Pull the prebuilt image from the private registry (on the NAS, run
-    # `docker compose pull && docker compose up -d` — no source checkout needed).
-    # `build: .` lets you rebuild locally with `docker compose build`.
-    image: registry.bpds1621.synology.me/reddit-research-mcp:latest
+    # Defaults to a locally built image, so `docker compose up -d --build` works
+    # from a fresh checkout. To deploy a prebuilt image instead, set
+    # REDDIT_RESEARCH_IMAGE=your-registry.example.com/reddit-research-mcp:latest
+    # in .env and run `docker compose pull && docker compose up -d`.
+    image: ${REDDIT_RESEARCH_IMAGE:-reddit-research-mcp:latest}
     build: .
     container_name: reddit-research-mcp
     restart: unless-stopped
@@ -31,7 +32,7 @@ services:
       # Host-header (DNS-rebinding) validation is OFF by default so the reverse
       # proxy's public Host header is accepted. To enforce a strict allowlist
       # instead, set your public hostname(s), comma-separated:
-      # REDDIT_RESEARCH_MCP_ALLOWED_HOSTS: reddit.bpds1621.synology.me
+      # REDDIT_RESEARCH_MCP_ALLOWED_HOSTS: reddit.example.com
 
     # Bind to loopback so the container is reachable ONLY via the NAS's reverse
     # proxy (which terminates TLS + is internet-facing). Change to "8000:8000"
