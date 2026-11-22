@@ -54,11 +54,16 @@ def _load_dotenv_files() -> None:
             load_dotenv(path, override=False)
 
 
+DEFAULT_RERANK_MODEL = "claude-haiku-5-5"
+
+
 @dataclass
 class SearchConfig:
     provider: str = "brave"
     default_limit: int = 10
     recency_days: int | None = None
+    # Extra LLM-written phrasings of the question to search with (0 disables).
+    query_variants: int = 3
 
 
 @dataclass
@@ -87,6 +92,23 @@ class SynthConfig:
     provider: str | None = None  # e.g. "anthropic"; None disables synthesis
     model: str | None = None
     api_key: str | None = None
+    # How many ranked evidence items are sent to the synthesis model.
+    max_evidence: int = 40
+
+    @property
+    def llm_enabled(self) -> bool:
+        """True when LLM calls (synthesis, rerank, query expansion) can run."""
+
+        return (self.provider or "").lower() == "anthropic" and bool(self.api_key)
+
+
+@dataclass
+class RerankConfig:
+    # Small/fast model that picks and orders evidence (and writes query
+    # variants). None/"off" disables LLM reranking; lexical order is used.
+    model: str | None = DEFAULT_RERANK_MODEL
+    # How many lexically-prefiltered items the reranker gets to choose from.
+    candidates: int = 80
 
 
 @dataclass
@@ -95,6 +117,7 @@ class Config:
     reddit: RedditConfig = field(default_factory=RedditConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     synth: SynthConfig = field(default_factory=SynthConfig)
+    rerank: RerankConfig = field(default_factory=RerankConfig)
     brave_api_key: str | None = None
     tavily_api_key: str | None = None
 
@@ -109,6 +132,22 @@ class Config:
             "tavily_api_key",
         }
     )
+
+
+_OFF = frozenset({"off", "none", "false", "0", "disabled"})
+
+
+def _int(env_value: str | None, toml_value: object, default: int) -> int:
+    """First usable integer of env override, TOML value, default."""
+
+    for raw in (env_value, toml_value):
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+    return default
 
 
 def _load_toml(path: Path | None) -> dict:
@@ -139,6 +178,9 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
         provider=env.get("REDDIT_RESEARCH_PROVIDER", search_tbl.get("provider", "brave")),
         default_limit=int(search_tbl.get("default_limit", 10)),
         recency_days=search_tbl.get("recency_days"),
+        query_variants=_int(
+            env.get("REDDIT_RESEARCH_QUERY_VARIANTS"), search_tbl.get("query_variants"), 3
+        ),
     )
 
     reddit = RedditConfig(
@@ -167,6 +209,22 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
         provider=env.get("REDDIT_RESEARCH_SYNTH_PROVIDER") or synth_tbl.get("provider"),
         model=env.get("REDDIT_RESEARCH_SYNTH_MODEL") or synth_tbl.get("model"),
         api_key=env.get("ANTHROPIC_API_KEY") or env.get("OPENAI_API_KEY"),
+        max_evidence=_int(
+            env.get("REDDIT_RESEARCH_SYNTH_MAX_EVIDENCE"), synth_tbl.get("max_evidence"), 40
+        ),
+    )
+
+    rerank_tbl = data.get("rerank", {})
+    rerank_model = (
+        env.get("REDDIT_RESEARCH_RERANK_MODEL")
+        or rerank_tbl.get("model")
+        or DEFAULT_RERANK_MODEL
+    )
+    rerank = RerankConfig(
+        model=None if rerank_model.strip().lower() in _OFF else rerank_model.strip(),
+        candidates=_int(
+            env.get("REDDIT_RESEARCH_RERANK_CANDIDATES"), rerank_tbl.get("candidates"), 80
+        ),
     )
 
     return Config(
@@ -174,6 +232,7 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
         reddit=reddit,
         cache=cache,
         synth=synth,
+        rerank=rerank,
         brave_api_key=env.get("BRAVE_SEARCH_API_KEY"),
         tavily_api_key=env.get("TAVILY_API_KEY"),
     )

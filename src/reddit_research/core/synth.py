@@ -9,18 +9,14 @@ callers can fall back to returning evidence only.
 
 from __future__ import annotations
 
-import json
-
-import httpx
-
 from .config import SynthConfig
 from .errors import redact
+from .llm import LLMError, complete
 from .models import Evidence
 
-ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
 # Room for the full structured answer plus a Sources list of ~25 permalinks.
-MAX_OUTPUT_TOKENS = 4096
+MAX_OUTPUT_TOKENS = 8000
 
 SYSTEM_PROMPT = """You synthesize answers from Reddit discussion evidence for a personal research tool.
 
@@ -76,46 +72,20 @@ def synthesize(
         raise SynthesisError("provider 'anthropic' is set but ANTHROPIC_API_KEY is empty")
 
     model = config.model or DEFAULT_ANTHROPIC_MODEL
-    payload = {
-        "model": model,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": _build_user_prompt(question, evidence)}],
-    }
-    headers = {
-        "x-api-key": config.api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
     try:
-        resp = httpx.post(ANTHROPIC_ENDPOINT, json=payload, headers=headers, timeout=timeout)
-    except httpx.HTTPError as exc:
-        raise SynthesisError(f"request to Anthropic failed: {type(exc).__name__}: {exc}") from exc
-    if resp.status_code >= 400:
-        raise SynthesisError(
-            f"Anthropic API HTTP {resp.status_code} (model {model!r}): {_api_error_message(resp)}"
+        text, truncated = complete(
+            api_key=config.api_key,
+            model=model,
+            system=SYSTEM_PROMPT,
+            user=_build_user_prompt(question, evidence),
+            max_tokens=MAX_OUTPUT_TOKENS,
+            timeout=timeout,
         )
-    try:
-        data = resp.json()
-    except json.JSONDecodeError as exc:
-        raise SynthesisError("Anthropic API returned non-JSON response") from exc
-    parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
-    text = "".join(parts).strip()
-    if not text:
-        raise SynthesisError(
-            f"Anthropic API returned no text (stop_reason={data.get('stop_reason')!r})"
-        )
-    if data.get("stop_reason") == "max_tokens":
+    except LLMError as exc:
+        raise SynthesisError(str(exc)) from exc
+    if truncated:
         text += "\n\n_[Answer truncated: hit the output token limit.]_"
     return text
-
-
-def _api_error_message(resp: httpx.Response) -> str:
-    try:
-        err = resp.json().get("error", {})
-        return f"{err.get('type', 'error')}: {err.get('message', '')}".strip()
-    except (json.JSONDecodeError, AttributeError):
-        return resp.text[:300]
 
 
 class SynthesisError(Exception):
