@@ -177,3 +177,56 @@ def test_safesearch_reaches_provider_and_splits_cache(tmp_path):
     with pytest.raises(SearchError):
         orch.search("backups", safesearch="nope")
     orch.close()
+
+
+def test_scoped_search_falls_back_when_site_filter_finds_nothing(tmp_path):
+    seen = []
+
+    class SiteFilterBroken(FakeProvider):
+        def search(self, query, limit=10, recency_days=None, safesearch=None):
+            seen.append(query)
+            if query.startswith("site:reddit.com/r/"):
+                # Brave's path-scoped filter: only the subreddit homepage comes back.
+                return [SearchResult(title="r/Swingers", url="https://reddit.com/r/swingers")]
+            return [
+                SearchResult(title="Best swinger sites",
+                             url="https://www.reddit.com/r/Swingers/comments/aaa/best/",
+                             subreddit="Swingers", snippet="sdc kasidie"),
+                SearchResult(title="Other sub",
+                             url="https://www.reddit.com/r/swingersr4r/comments/bbb/x/",
+                             subreddit="swingersr4r"),
+            ]
+
+    orch = _orch(tmp_path)
+    orch._provider = SiteFilterBroken()
+    orch.config.search.query_variants = 0
+    meta_results = orch.search("best swinger sites", subreddits=["swingers"])
+    assert seen == [
+        "site:reddit.com/r/swingers best swinger sites",
+        "site:reddit.com best swinger sites r/swingers",
+    ]
+    urls = [r.url for r in meta_results]
+    assert any("/comments/aaa/" in u for u in urls)
+    assert not any("swingersr4r" in u for u in urls)
+    assert "https://reddit.com/r/swingers" not in urls  # homepage dropped
+    orch.close()
+
+
+def test_scoped_search_skips_fallback_when_results_are_fine(tmp_path):
+    seen = []
+
+    class TwoThreads(FakeProvider):
+        def search(self, query, limit=10, recency_days=None, safesearch=None):
+            seen.append(query)
+            return [
+                SearchResult(title=f"t{i}", url=f"https://www.reddit.com/r/selfhosted/comments/x{i}/t/",
+                             subreddit="selfhosted")
+                for i in range(2)
+            ]
+
+    orch = _orch(tmp_path)
+    orch._provider = TwoThreads()
+    orch.config.search.query_variants = 0
+    orch.search("backups", subreddits=["selfhosted"])
+    assert seen == ["site:reddit.com/r/selfhosted backups"]
+    orch.close()

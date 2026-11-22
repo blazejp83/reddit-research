@@ -271,3 +271,25 @@ def test_brave_gives_up_after_max_retries(monkeypatch):
         BraveSearchProvider(api_key="k").search("x")
     assert len(route.calls) == search.BRAVE_MAX_RETRIES + 1
 
+
+def test_subreddit_fallback_rewrites_scoped_queries():
+    from reddit_research.core.search import subreddit_fallback
+
+    assert subreddit_fallback("site:reddit.com/r/Swingers best apps") == (
+        "site:reddit.com best apps r/Swingers",
+        "swingers",
+    )
+    assert subreddit_fallback("site:reddit.com best apps") is None
+    assert subreddit_fallback("best apps") is None
+
+
+def test_threads_in_subreddit_drops_homepages_and_other_subs():
+    from reddit_research.core.search import threads_in_subreddit
+
+    results = [
+        SearchResult(title="home", url="https://reddit.com/r/swingers"),
+        SearchResult(title="a", url="https://www.reddit.com/r/Swingers/comments/aaa/x/"),
+        SearchResult(title="b", url="https://www.reddit.com/r/swingersr4r/comments/bbb/y/"),
+    ]
+    assert [r.title for r in threads_in_subreddit(results)] == ["a", "b"]
+    assert [r.title for r in threads_in_subreddit(results, "swingers")] == ["a"]

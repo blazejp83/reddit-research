@@ -30,8 +30,11 @@ from .search import (
     get_provider,
     merge_results,
     normalize_safesearch,
+    SCOPED_MIN_THREADS,
     plan_queries,
     query_key,
+    subreddit_fallback,
+    threads_in_subreddit,
 )
 from .synth import SynthesisError, synthesize
 from .urls import parse_ref
@@ -93,22 +96,15 @@ class Orchestrator:
 
         result_lists: list[list[SearchResult]] = []
         for q in queries:
-            key = query_key(q, limit, recency_days, safesearch)
-            cached = self.cache.get_search_results(key, self.config.cache.search_ttl_days)
-            if cached is not None:
-                meta.cache_hits += 1
-                result_lists.append(cached)
-                continue
-            meta.cache_misses += 1
-            try:
-                results = self.provider.search(
-                    q, limit=limit, recency_days=recency_days, safesearch=safesearch
-                )
-            except errors.SearchError as exc:
-                meta.warnings.append(errors.warning(errors.SEARCH_UNAVAILABLE, str(exc)))
-                result_lists.append([])
-                continue
-            self.cache.put_search_results(key, results)
+            results = self._run_query(q, limit, recency_days, safesearch, meta)
+            fallback = subreddit_fallback(q)
+            if fallback and len(threads_in_subreddit(results)) < SCOPED_MIN_THREADS:
+                # The path-scoped site: filter finds nothing for some subreddits;
+                # retry unscoped and keep only that subreddit's threads.
+                fallback_query, sub = fallback
+                meta.search_queries.append(fallback_query)
+                extra = self._run_query(fallback_query, limit, recency_days, safesearch, meta)
+                results = threads_in_subreddit(results) + threads_in_subreddit(extra, sub)
             result_lists.append(results)
 
         if len(result_lists) > 1:
@@ -124,6 +120,32 @@ class Orchestrator:
                 errors.warning(errors.FEW_RESULTS, f"Only {len(ranked)} candidate threads found.")
             )
         return ranked[:limit]
+
+    def _run_query(
+        self,
+        q: str,
+        limit: int,
+        recency_days: int | None,
+        safesearch: str,
+        meta: RunMetadata,
+    ) -> list[SearchResult]:
+        """One provider search, through the cache; failures become warnings."""
+
+        key = query_key(q, limit, recency_days, safesearch)
+        cached = self.cache.get_search_results(key, self.config.cache.search_ttl_days)
+        if cached is not None:
+            meta.cache_hits += 1
+            return cached
+        meta.cache_misses += 1
+        try:
+            results = self.provider.search(
+                q, limit=limit, recency_days=recency_days, safesearch=safesearch
+            )
+        except errors.SearchError as exc:
+            meta.warnings.append(errors.warning(errors.SEARCH_UNAVAILABLE, str(exc)))
+            return []
+        self.cache.put_search_results(key, results)
+        return results
 
     def _query_variants(self, query: str, meta: RunMetadata) -> list[str]:
         """LLM-written alternative phrasings of the question (empty when off)."""

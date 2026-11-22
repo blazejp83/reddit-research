@@ -8,6 +8,7 @@ into concrete ``site:reddit.com`` queries.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -35,6 +36,9 @@ DEFAULT_SAFESEARCH = "moderate"
 
 # How many subreddits of an allowlist each query variant is searched in.
 VARIANT_SUBREDDITS = 2
+# A subreddit-scoped search finding fewer threads than this falls back to an
+# unscoped one (see ``subreddit_fallback``).
+SCOPED_MIN_THREADS = 2
 # RRF damping constant (the conventional value); larger flattens rank differences.
 RRF_K = 60
 # The user's own wording is the best statement of intent, so its results count more.
@@ -73,6 +77,42 @@ def plan_queries(
         if variant:
             queries.extend(scoped(variant, variant_subs))
     return list(dict.fromkeys(queries))
+
+
+_SCOPED_RE = re.compile(r"^site:reddit\.com/r/(?P<sub>[A-Za-z0-9_]+)\s+(?P<text>.+)$", re.S)
+
+
+def subreddit_fallback(query: str) -> tuple[str, str] | None:
+    """Unscoped rewrite of a ``site:reddit.com/r/<sub>`` query.
+
+    Brave's path-scoped ``site:`` filter returns nothing useful for some
+    subreddits (e.g. r/Swingers yields only the subreddit homepage) while a
+    plain ``site:reddit.com ... r/<sub>`` query finds its threads. Returns
+    ``(fallback_query, subreddit)``, or ``None`` for a query that is not
+    subreddit-scoped. Callers should keep only the fallback's results from that
+    subreddit (:func:`threads_in_subreddit`).
+    """
+
+    m = _SCOPED_RE.match(query.strip())
+    if not m:
+        return None
+    sub = m.group("sub")
+    return f"site:reddit.com {m.group('text').strip()} r/{sub}", sub.lower()
+
+
+def threads_in_subreddit(results: list[SearchResult], subreddit: str | None = None) -> list[SearchResult]:
+    """Results that point at a submission (optionally in ``subreddit``)."""
+
+    want = subreddit.lower() if subreddit else None
+    kept = []
+    for r in results:
+        ref = parse_ref(r.url)
+        if not ref or not ref.submission_id:
+            continue
+        sub = (r.subreddit or subreddit_from_url(r.url) or "").lower()
+        if want is None or sub == want:
+            kept.append(r)
+    return kept
 
 
 def merge_results(
