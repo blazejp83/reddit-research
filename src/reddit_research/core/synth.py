@@ -19,6 +19,8 @@ from .models import Evidence
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
+# Room for the full structured answer plus a Sources list of ~25 permalinks.
+MAX_OUTPUT_TOKENS = 4096
 
 SYSTEM_PROMPT = """You synthesize answers from Reddit discussion evidence for a personal research tool.
 
@@ -76,7 +78,7 @@ def synthesize(
     model = config.model or DEFAULT_ANTHROPIC_MODEL
     payload = {
         "model": model,
-        "max_tokens": 1500,
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": _build_user_prompt(question, evidence)}],
     }
@@ -103,6 +105,8 @@ def synthesize(
         raise SynthesisError(
             f"Anthropic API returned no text (stop_reason={data.get('stop_reason')!r})"
         )
+    if data.get("stop_reason") == "max_tokens":
+        text += "\n\n_[Answer truncated: hit the output token limit.]_"
     return text
 
 
