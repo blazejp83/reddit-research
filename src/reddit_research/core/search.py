@@ -23,6 +23,11 @@ TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
 # Brave's free tier allows 1 request/second.
 DEFAULT_BRAVE_RATE_LIMIT = 1.0
+# Brave counts requests by arrival time, so calls sent exactly 1/rate apart can
+# land closer together after network jitter and get a 429. Pad the spacing.
+RATE_LIMIT_MARGIN = 0.15
+# Retries after a 429 before giving up on a query.
+BRAVE_MAX_RETRIES = 3
 SAFESEARCH_VALUES = ("off", "moderate", "strict")
 # Brave's own default; also what every search uses unless a query asks otherwise.
 DEFAULT_SAFESEARCH = "moderate"
@@ -158,7 +163,7 @@ class RateLimiter:
 
     def set_rate(self, rate: float) -> None:
         with self._lock:
-            self._interval = 1.0 / rate if rate > 0 else 0.0
+            self._interval = (1.0 + RATE_LIMIT_MARGIN) / rate if rate > 0 else 0.0
 
     def acquire(self) -> None:
         with self._lock:
@@ -170,6 +175,12 @@ class RateLimiter:
         delay = slot - now
         if delay > 0:
             time.sleep(delay)
+
+    def back_off(self, seconds: float) -> None:
+        """Push the next free slot out by ``seconds`` (after a 429)."""
+
+        with self._lock:
+            self._next_at = max(self._next_at, time.monotonic() + seconds)
 
 
 # One limiter per process, shared by every Brave provider instance: the quota
@@ -252,11 +263,17 @@ class BraveSearchProvider(SearchProvider):
             "Accept": "application/json",
             "X-Subscription-Token": self._api_key,
         }
-        _BRAVE_LIMITER.acquire()
         try:
-            resp = httpx.get(
-                BRAVE_ENDPOINT, params=params, headers=headers, timeout=self._timeout
-            )
+            for attempt in range(BRAVE_MAX_RETRIES + 1):
+                _BRAVE_LIMITER.acquire()
+                resp = httpx.get(
+                    BRAVE_ENDPOINT, params=params, headers=headers, timeout=self._timeout
+                )
+                if resp.status_code != 429 or attempt == BRAVE_MAX_RETRIES:
+                    break
+                # Rate limited: wait (honouring Retry-After) and queue again, so
+                # the retry also delays every other caller sharing the key.
+                _BRAVE_LIMITER.back_off(_retry_after(resp, attempt))
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:  # pragma: no cover - network path
             raise SearchError(
@@ -304,6 +321,18 @@ class TavilySearchProvider(SearchProvider):
             {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
             for r in data.get("results", [])
         ]
+
+
+def _retry_after(resp: httpx.Response, attempt: int) -> float:
+    """Seconds to wait after a 429: ``Retry-After`` if usable, else backoff."""
+
+    try:
+        value = float(resp.headers.get("Retry-After", ""))
+        if 0 < value <= 30:
+            return value
+    except ValueError:
+        pass
+    return 1.0 * (2**attempt)
 
 
 def _brave_freshness(recency_days: int) -> str:

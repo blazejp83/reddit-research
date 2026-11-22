@@ -185,14 +185,15 @@ def test_rate_limiter_spaces_calls(monkeypatch):
     monkeypatch.setattr(search.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(search.time, "sleep", fake_sleep)
 
-    limiter = search.RateLimiter(2.0)  # 0.5s apart
+    limiter = search.RateLimiter(2.0)  # 0.5s apart, plus the safety margin
+    gap = pytest.approx((1 + search.RATE_LIMIT_MARGIN) / 2.0)
     for _ in range(3):
         limiter.acquire()
-    assert sleeps == [0.5, 0.5]
+    assert sleeps == [gap, gap]
 
     clock["now"] += 5  # idle long enough: next call goes straight through
     limiter.acquire()
-    assert sleeps == [0.5, 0.5]
+    assert sleeps == [gap, gap]
 
 
 def test_rate_limiter_zero_disables(monkeypatch):
@@ -234,3 +235,39 @@ def test_query_key_safesearch():
     assert query_key("q", 10, None, "moderate") == base  # old cache entries still hit
     assert query_key("q", 10, None, "off") != base
     assert query_key("q", 10, None, "off") != query_key("q", 10, None, "strict")
+
+
+@respx.mock
+def test_brave_retries_after_429(monkeypatch):
+    from reddit_research.core import search
+
+    backoffs = []
+    monkeypatch.setattr(search._BRAVE_LIMITER, "acquire", lambda: None)
+    monkeypatch.setattr(search._BRAVE_LIMITER, "back_off", backoffs.append)
+    route = respx.get(search.BRAVE_ENDPOINT).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "2"}, json={}),
+            httpx.Response(429, json={}),
+            httpx.Response(200, json={"web": {"results": [
+                {"title": "t", "url": "https://www.reddit.com/r/a/comments/abc/x/", "description": ""}
+            ]}}),
+        ]
+    )
+    results = BraveSearchProvider(api_key="k").search("x")
+    assert len(route.calls) == 3
+    assert backoffs == [2.0, 2.0]  # Retry-After honoured, then exponential fallback
+    assert len(results) == 1
+
+
+@respx.mock
+def test_brave_gives_up_after_max_retries(monkeypatch):
+    from reddit_research.core import search
+    from reddit_research.core.errors import SearchError
+
+    monkeypatch.setattr(search._BRAVE_LIMITER, "acquire", lambda: None)
+    monkeypatch.setattr(search._BRAVE_LIMITER, "back_off", lambda s: None)
+    route = respx.get(search.BRAVE_ENDPOINT).mock(return_value=httpx.Response(429, json={}))
+    with pytest.raises(SearchError):
+        BraveSearchProvider(api_key="k").search("x")
+    assert len(route.calls) == search.BRAVE_MAX_RETRIES + 1
+
