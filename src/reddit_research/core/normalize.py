@@ -80,7 +80,8 @@ def assign_depths_from_parents(comments: list[Comment], link_fullname: str) -> N
 
     Archive backends return comments without reliable depth. Root comments have
     ``parent_id == t3_<link>``; each reply is one deeper than its parent. Orphan
-    comments (parent not in the set, e.g. dropped by a limit) default to depth 0.
+    replies (parent comment not in the set, e.g. dropped by a limit) are known
+    to be replies, so they get depth 1 rather than being passed off as roots.
     """
 
     by_id = {c.id: c for c in comments}
@@ -96,8 +97,8 @@ def assign_depths_from_parents(comments: list[Comment], link_fullname: str) -> N
         parent_id = parent[3:]
         parent_comment = by_id.get(parent_id)
         if parent_comment is None:
-            memo[c.id] = 0
-            return 0
+            memo[c.id] = 1
+            return 1
         memo[c.id] = 0  # guard against cycles in malformed data
         d = depth_of(parent_comment) + 1
         memo[c.id] = d

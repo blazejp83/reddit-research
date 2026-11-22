@@ -20,4 +20,4 @@ thread_ttl_days = 30
 
 [synth]
 # provider = "anthropic"  # leave unset to return evidence only
-# model = "claude-sonnet-5"
+# model = "claude-sonnet-5-5"

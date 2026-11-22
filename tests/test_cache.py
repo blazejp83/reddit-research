@@ -54,3 +54,20 @@ def test_stats(tmp_path):
     stats = c.stats()
     assert stats["threads"] == 1
     assert stats["comments"] == 1
+
+
+def test_old_thread_format_is_invalidated(tmp_path):
+    import sqlite3
+
+    from reddit_research.core.cache import Cache
+    from reddit_research.core.models import Thread
+
+    path = tmp_path / "c.sqlite"
+    with Cache(path) as c:
+        c.put_thread(Thread(id="t1", subreddit="s", title="x", url="u", permalink="p"))
+    sqlite3.connect(path).execute("PRAGMA user_version = 1").connection.commit()
+    with Cache(path) as c:
+        assert c.get_thread("t1", ttl_days=30) is None
+        c.put_thread(Thread(id="t2", subreddit="s", title="x", url="u", permalink="p"))
+    with Cache(path) as c:  # current version: kept
+        assert c.get_thread("t2", ttl_days=30) is not None

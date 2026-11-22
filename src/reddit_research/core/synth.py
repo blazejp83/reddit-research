@@ -18,7 +18,7 @@ from .errors import redact
 from .models import Evidence
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
 
 SYSTEM_PROMPT = """You synthesize answers from Reddit discussion evidence for a personal research tool.
 
@@ -57,18 +57,21 @@ def synthesize(
 ) -> str | None:
     """Return a synthesized cited answer, or ``None`` if synthesis is disabled.
 
-    Raises no network errors to the caller by design: on failure it returns
-    ``None`` and leaves the orchestrator to attach a warning.
+    Returns ``None`` only when no provider is configured (synthesis off by
+    choice). Any other reason synthesis can't run -- unsupported provider,
+    missing key, API/network failure -- raises :class:`SynthesisError` with a
+    redacted, specific reason so the caller can surface it as a warning.
     """
 
     provider = (config.provider or "").lower()
-    if not provider or not evidence:
+    if not provider:
         return None
+    if not evidence:
+        raise SynthesisError("no evidence to synthesize from")
     if provider != "anthropic":
-        # Only Anthropic is wired up in the MVP; other providers no-op for now.
-        return None
+        raise SynthesisError(f"unsupported provider {provider!r} (only 'anthropic' is supported)")
     if not config.api_key:
-        return None
+        raise SynthesisError("provider 'anthropic' is set but ANTHROPIC_API_KEY is empty")
 
     model = config.model or DEFAULT_ANTHROPIC_MODEL
     payload = {
@@ -84,18 +87,35 @@ def synthesize(
     }
     try:
         resp = httpx.post(ANTHROPIC_ENDPOINT, json=payload, headers=headers, timeout=timeout)
-        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise SynthesisError(f"request to Anthropic failed: {type(exc).__name__}: {exc}") from exc
+    if resp.status_code >= 400:
+        raise SynthesisError(
+            f"Anthropic API HTTP {resp.status_code} (model {model!r}): {_api_error_message(resp)}"
+        )
+    try:
         data = resp.json()
-        parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
-        return "".join(parts).strip() or None
-    except httpx.HTTPError:
-        return None
-    except (KeyError, json.JSONDecodeError):
-        return None
+    except json.JSONDecodeError as exc:
+        raise SynthesisError("Anthropic API returned non-JSON response") from exc
+    parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
+    text = "".join(parts).strip()
+    if not text:
+        raise SynthesisError(
+            f"Anthropic API returned no text (stop_reason={data.get('stop_reason')!r})"
+        )
+    return text
+
+
+def _api_error_message(resp: httpx.Response) -> str:
+    try:
+        err = resp.json().get("error", {})
+        return f"{err.get('type', 'error')}: {err.get('message', '')}".strip()
+    except (json.JSONDecodeError, AttributeError):
+        return resp.text[:300]
 
 
 class SynthesisError(Exception):
-    """Raised only when the caller explicitly requires synthesis and it fails."""
+    """Synthesis was enabled but could not produce an answer; message is redacted."""
 
     def __init__(self, message: str) -> None:
         super().__init__(redact(message))

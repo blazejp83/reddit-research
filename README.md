@@ -30,7 +30,8 @@ Configuration splits cleanly in two:
   REDDIT_CLIENT_ID=...
   REDDIT_CLIENT_SECRET=...
   BRAVE_SEARCH_API_KEY=...        # or TAVILY_API_KEY (search always needs a key)
-  ANTHROPIC_API_KEY=...           # only if you enable synthesis
+  ANTHROPIC_API_KEY=...           # only if you enable synthesis, which also
+  REDDIT_RESEARCH_SYNTH_PROVIDER=anthropic   # needs a provider (or [synth] in TOML)
   ```
 
 - **Non-secret behavior → `reddit-research.toml`** (see `reddit-research.example.toml`):
@@ -111,7 +112,8 @@ The included `Dockerfile` + `docker-compose.yml` run the MCP server over HTTP.
    ```bash
    BRAVE_SEARCH_API_KEY=...                 # search needs a key
    REDDIT_RESEARCH_MCP_TOKEN=$(openssl rand -hex 32)   # required bearer token
-   # ANTHROPIC_API_KEY=...                  # only if you enable synthesis
+   # ANTHROPIC_API_KEY=...                  # synthesis: key + provider
+   # REDDIT_RESEARCH_SYNTH_PROVIDER=anthropic
    ```
 
 2. **Run** — build from source:

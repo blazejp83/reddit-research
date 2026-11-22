@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS fetch_runs (
 """
 
 
+# Bump when the shape or completeness of cached threads changes, so stale
+# entries written by an older fetcher are dropped instead of served for a TTL.
+THREAD_FORMAT_VERSION = 2
+
+
 class Cache:
     """Thin wrapper over a SQLite connection with TTL-aware read helpers."""
 
@@ -58,6 +63,15 @@ class Cache:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._invalidate_stale_threads()
+
+    def _invalidate_stale_threads(self) -> None:
+        (version,) = self.conn.execute("PRAGMA user_version").fetchone()
+        if version < THREAD_FORMAT_VERSION:
+            self.conn.execute("DELETE FROM threads")
+            self.conn.execute("DELETE FROM comments")
+            self.conn.execute(f"PRAGMA user_version = {THREAD_FORMAT_VERSION}")
+            self.conn.commit()
         self.conn.commit()
 
     # -- lifecycle ---------------------------------------------------------

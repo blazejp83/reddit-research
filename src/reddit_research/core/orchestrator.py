@@ -7,6 +7,8 @@ becomes a warning rather than aborting the whole run.
 
 from __future__ import annotations
 
+import logging
+
 from .cache import Cache
 from .config import Config
 from . import errors
@@ -21,8 +23,10 @@ from .models import (
 )
 from . import ranking
 from .search import get_provider, plan_queries, query_key
-from .synth import synthesize
+from .synth import SynthesisError, synthesize
 from .urls import parse_ref
+
+logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -194,14 +198,14 @@ class Orchestrator:
         )
         answer_text: str | None = None
         if include_answer:
-            answer_text = synthesize(question, ev.evidence, self.config.synth)
-            if answer_text is None:
-                ev.metadata.warnings.append(
-                    errors.warning(
-                        errors.SYNTH_UNAVAILABLE,
-                        "Synthesis skipped (no provider configured or synthesis failed).",
-                    )
-                )
+            try:
+                answer_text = synthesize(question, ev.evidence, self.config.synth)
+                reason = None if answer_text else "no synthesis provider configured"
+            except SynthesisError as exc:
+                reason = f"synthesis failed: {exc}"
+                logger.warning("LLM synthesis failed: %s", exc)
+            if reason:
+                ev.metadata.warnings.append(errors.warning(errors.SYNTH_UNAVAILABLE, reason))
         return AnswerResult(
             answer=answer_text,
             evidence=ev.evidence,

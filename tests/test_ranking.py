@@ -54,3 +54,13 @@ def test_rank_threads_dedupes_and_boosts_allowlist():
     # Duplicate title collapsed to one.
     assert len(ranked) == 1
     assert ranked[0].subreddit == "selfhosted"
+
+
+def test_rank_evidence_dedupes_identical_comments():
+    text = "It helps with back pain because you switch positions more often."
+    comments = [
+        Comment(id=f"d{i}", body=text if i % 2 else text.upper() + "!!", score=1) for i in range(3)
+    ] + [Comment(id="u", body="Back pain went away after a walking pad.", score=1)]
+    thread = Thread(id="t", subreddit="s", title="Standing desk", url="u", permalink="p", comments=comments)
+    ev = ranking.rank_evidence("standing desk back pain", [thread], include_threads=False)
+    assert len(ev) == 2

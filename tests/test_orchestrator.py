@@ -1,3 +1,5 @@
+import respx
+
 from reddit_research.core.cache import Cache
 from reddit_research.core.config import load_config
 from reddit_research.core.models import Comment, SearchResult, Thread
@@ -69,4 +71,21 @@ def test_answer_without_synthesis_warns(tmp_path):
     result = orch.answer("backups", subreddits=["selfhosted"], include_answer=True)
     assert result.answer is None
     assert any("llm_synthesis_unavailable" in w for w in result.metadata.warnings)
+    orch.close()
+
+
+def test_answer_synthesis_failure_reason_in_warning(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-secretvalue")
+    orch = _orch(tmp_path)
+    orch.config.synth.provider = "anthropic"
+    orch.config.synth.api_key = "sk-test-secretvalue"
+    with respx.mock() as router:
+        router.post("https://api.anthropic.com/v1/messages").respond(
+            404, json={"type": "error", "error": {"type": "not_found_error", "message": "model: nope"}}
+        )
+        result = orch.answer("backups", subreddits=["selfhosted"], include_answer=True)
+    assert result.answer is None
+    warn = next(w for w in result.metadata.warnings if "llm_synthesis_unavailable" in w)
+    assert "HTTP 404" in warn and "not_found_error" in warn
+    assert "sk-test-secretvalue" not in warn
     orch.close()

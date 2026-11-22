@@ -162,4 +162,22 @@ def rank_evidence(
             )
 
     items.sort(key=lambda x: x.score, reverse=True)
-    return items[:max_evidence_items]
+    return _dedupe(items)[:max_evidence_items]
+
+
+def _dedupe(items: list[Evidence]) -> list[Evidence]:
+    """Drop repeated text (double-posts, copy-paste spam), keeping the best-ranked.
+
+    ``items`` must already be sorted best-first. Text is compared after folding
+    case, punctuation and whitespace, so trivially-different copies collapse.
+    """
+
+    seen: set[str] = set()
+    out: list[Evidence] = []
+    for ev in items:
+        key = " ".join(_TOKEN_RE.findall(ev.text.lower()))
+        if key and key in seen:
+            continue
+        seen.add(key)
+        out.append(ev)
+    return out
