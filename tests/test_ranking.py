@@ -64,3 +64,13 @@ def test_rank_evidence_dedupes_identical_comments():
     thread = Thread(id="t", subreddit="s", title="Standing desk", url="u", permalink="p", comments=comments)
     ev = ranking.rank_evidence("standing desk back pain", [thread], include_threads=False)
     assert len(ev) == 2
+
+
+def test_well_voted_comment_outranks_low_vote_with_equal_relevance():
+    comments = [
+        Comment(id="low", body="standing desk helped my back pain", score=1),
+        Comment(id="high", body="standing desk fixed my back pain", score=300),
+    ]
+    thread = Thread(id="t", subreddit="s", title="Desks", url="u", permalink="p", comments=comments)
+    ev = ranking.rank_evidence("standing desk back pain", [thread], include_threads=False)
+    assert ev[0].reddit_score == 300

@@ -67,6 +67,29 @@ def _popularity(score: int) -> float:
     return min(1.0, math.log10(score + 1) / 3.0)  # ~1.0 around 1000 upvotes
 
 
+# Relevance vs. community signal. Lexical overlap is a coarse match (any comment
+# echoing the question's words scores high), so votes need enough weight to lift
+# well-received answers over low-vote ones that merely repeat the question.
+W_LEXICAL = 0.5
+W_POPULARITY = 0.35
+W_RECENCY = 0.15
+
+
+def _comment_popularity(score: int, thread_max: int) -> float:
+    """Blend absolute votes with votes relative to the thread's best comment.
+
+    The relative half lets the standout answers in a small, quiet thread compete
+    with comments from a big thread; the absolute half keeps a 3-vote "top"
+    comment from looking as validated as a 300-vote one.
+    """
+
+    absolute = _popularity(score)
+    if score <= 0 or thread_max <= 0:
+        return 0.5 * absolute
+    relative = math.log10(score + 1) / math.log10(thread_max + 1)
+    return 0.5 * absolute + 0.5 * relative
+
+
 def _recency(created_utc: float | None, now: float, half_life_days: float = 365.0) -> float:
     if not created_utc:
         return 0.5
@@ -119,9 +142,9 @@ def rank_evidence(
             lexical = _overlap(qtokens, body)
             if lexical > 0:
                 combined = (
-                    0.6 * lexical
-                    + 0.25 * _popularity(thread.score)
-                    + 0.15 * _recency(thread.created_utc, now)
+                    W_LEXICAL * lexical
+                    + W_POPULARITY * _popularity(thread.score)
+                    + W_RECENCY * _recency(thread.created_utc, now)
                 )
                 items.append(
                     Evidence(
@@ -136,6 +159,7 @@ def rank_evidence(
                     )
                 )
 
+        thread_max = max((c.score for c in thread.comments if not c.removed), default=0)
         for c in thread.comments:
             if c.removed or not c.body:
                 continue
@@ -144,9 +168,9 @@ def rank_evidence(
                 continue
             depth_penalty = 1.0 / (1.0 + 0.35 * c.depth)
             combined = (
-                0.6 * lexical
-                + 0.25 * _popularity(c.score)
-                + 0.15 * _recency(c.created_utc, now)
+                W_LEXICAL * lexical
+                + W_POPULARITY * _comment_popularity(c.score, thread_max)
+                + W_RECENCY * _recency(c.created_utc, now)
             ) * depth_penalty
             items.append(
                 Evidence(
