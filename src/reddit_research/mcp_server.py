@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import hmac
 import os
+import sys
+from pathlib import Path
 from typing import Any
 
 from .core import ranking
@@ -240,8 +242,27 @@ def _run_http() -> None:  # pragma: no cover - network entry
     )
 
 
+# Written by the Dockerfile at image build time; absent in a local checkout.
+BUILD_INFO_PATH = Path(os.environ.get("REDDIT_RESEARCH_BUILD_INFO", "/app/BUILD_INFO"))
+
+
+def build_info() -> str:
+    """Version plus the image's build identity (commit, build date) if known."""
+
+    from . import __version__
+
+    try:
+        extra = BUILD_INFO_PATH.read_text().strip()
+    except OSError:
+        extra = "commit=unknown built=unknown (not a container build)"
+    return f"version={__version__} {extra}"
+
+
 def main() -> None:  # pragma: no cover - entry point
     transport = os.environ.get("REDDIT_RESEARCH_MCP_TRANSPORT", "stdio").lower()
+    # stderr, so it never corrupts the stdio transport's stdout protocol stream.
+    print(f"reddit-research-mcp starting: {build_info()} transport={transport}",
+          file=sys.stderr, flush=True)
     if transport in ("http", "streamable-http", "streamable_http"):
         _run_http()
     elif transport == "sse":

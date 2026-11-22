@@ -11,6 +11,14 @@ RUN uv sync --frozen --no-dev --extra mcp
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Build identity, printed in the startup log. Pass GIT_SHA (and optionally
+# BUILD_DATE) as build args; the date falls back to the time of the build.
+# Kept after the dependency install so changing them doesn't bust that cache.
+ARG GIT_SHA=unknown
+ARG BUILD_DATE=
+RUN printf 'commit=%s built=%s\n' "$GIT_SHA" "${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+    > /app/BUILD_INFO
+
 # HTTP transport bound to all interfaces inside the container.
 ENV REDDIT_RESEARCH_MCP_TRANSPORT=streamable-http \
     REDDIT_RESEARCH_MCP_HOST=0.0.0.0 \

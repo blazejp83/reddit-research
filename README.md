@@ -136,10 +136,17 @@ The included `Dockerfile` + `docker-compose.yml` run the MCP server over HTTP.
    To publish a new image after code changes:
 
    ```bash
-   docker build --provenance=false \
+   SHA=$(git rev-parse --short HEAD)
+   docker build --provenance=false --build-arg GIT_SHA=$SHA \
+     -t "$REGISTRY/reddit-research-mcp:$SHA" \
      -t "$REGISTRY/reddit-research-mcp:latest" .
+   docker push "$REGISTRY/reddit-research-mcp:$SHA"
    docker push "$REGISTRY/reddit-research-mcp:latest"
    ```
+
+   The first line of the container log names the running build, e.g.
+   `reddit-research-mcp starting: version=0.1.0 commit=7e27292 built=2026-11-22T14:03:11Z ...`
+   (`docker logs reddit-research-mcp | head -1`).
 
    The SQLite cache persists in `./data`. The container binds to `127.0.0.1:8000`
    by default, so it's reachable only through the NAS's reverse proxy (change the

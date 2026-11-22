@@ -70,3 +70,15 @@ def test_correct_token_passes_through():
     rec, state = _call("/mcp", [(b"authorization", b"Bearer s3cret")])
     assert rec.status == 200
     assert state["called"] is True
+
+
+def test_build_info_reads_file_or_falls_back(tmp_path, monkeypatch):
+    from reddit_research import mcp_server
+
+    monkeypatch.setattr(mcp_server, "BUILD_INFO_PATH", tmp_path / "missing")
+    assert "commit=unknown" in mcp_server.build_info()
+
+    info = tmp_path / "BUILD_INFO"
+    info.write_text("commit=abc1234 built=2026-11-22T10:00:00Z\n")
+    monkeypatch.setattr(mcp_server, "BUILD_INFO_PATH", info)
+    assert mcp_server.build_info().endswith("commit=abc1234 built=2026-11-22T10:00:00Z")
