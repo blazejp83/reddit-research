@@ -50,3 +50,27 @@ def test_llm_tuning_env_vars(monkeypatch):
     cfg = load_config()
     assert cfg.rerank.model is None
     assert cfg.synth.max_evidence == 40
+
+
+def test_brave_settings_from_toml_and_env(tmp_path, monkeypatch):
+    from reddit_research.core.config import load_config
+
+    monkeypatch.delenv("REDDIT_RESEARCH_BRAVE_RATE_LIMIT", raising=False)
+    toml = tmp_path / "c.toml"
+    toml.write_text("[search]\nbrave_rate_limit = 0.5\n")
+    cfg = load_config(toml)
+    assert cfg.search.brave_rate_limit == 0.5
+
+    monkeypatch.setenv("REDDIT_RESEARCH_BRAVE_RATE_LIMIT", "20")
+    cfg = load_config(toml)
+    assert cfg.search.brave_rate_limit == 20.0
+
+
+def test_brave_settings_defaults(tmp_path, monkeypatch):
+    from reddit_research.core.config import load_config
+
+    monkeypatch.delenv("REDDIT_RESEARCH_BRAVE_RATE_LIMIT", raising=False)
+    toml = tmp_path / "c.toml"
+    toml.write_text("[search]\n")
+    cfg = load_config(toml)
+    assert cfg.search.brave_rate_limit == 1.0

@@ -8,6 +8,8 @@ into concrete ``site:reddit.com`` queries.
 
 from __future__ import annotations
 
+import threading
+import time
 from abc import ABC, abstractmethod
 
 import httpx
@@ -18,6 +20,12 @@ from .urls import is_reddit_url, parse_ref, subreddit_from_url
 
 BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 TAVILY_ENDPOINT = "https://api.tavily.com/search"
+
+# Brave's free tier allows 1 request/second.
+DEFAULT_BRAVE_RATE_LIMIT = 1.0
+SAFESEARCH_VALUES = ("off", "moderate", "strict")
+# Brave's own default; also what every search uses unless a query asks otherwise.
+DEFAULT_SAFESEARCH = "moderate"
 
 
 # How many subreddits of an allowlist each query variant is searched in.
@@ -106,26 +114,90 @@ def merge_results(
     ]
 
 
-def query_key(query: str, limit: int, recency_days: int | None) -> str:
-    """Stable cache key for a planned query."""
+def normalize_safesearch(value: str | None) -> str:
+    """Validate a safesearch level; ``None``/empty means the default."""
 
-    return f"{query}::limit={limit}::recency={recency_days or 'any'}"
+    level = (value or DEFAULT_SAFESEARCH).strip().lower()
+    if level not in SAFESEARCH_VALUES:
+        raise SearchError(
+            f"Invalid safesearch {value!r}; expected one of {', '.join(SAFESEARCH_VALUES)}."
+        )
+    return level
+
+
+def query_key(
+    query: str,
+    limit: int,
+    recency_days: int | None,
+    safesearch: str = DEFAULT_SAFESEARCH,
+) -> str:
+    """Stable cache key for a planned query.
+
+    The default safesearch level adds nothing, so keys (and cached results)
+    from before safesearch was configurable stay valid.
+    """
+
+    key = f"{query}::limit={limit}::recency={recency_days or 'any'}"
+    if safesearch != DEFAULT_SAFESEARCH:
+        key += f"::safesearch={safesearch}"
+    return key
+
+
+class RateLimiter:
+    """Thread-safe limiter spacing calls at least ``1 / rate`` seconds apart.
+
+    Each caller reserves the next free slot under the lock, then sleeps
+    outside it, so concurrent callers queue up in order instead of bursting.
+    A ``rate`` of ``0`` or less disables limiting.
+    """
+
+    def __init__(self, rate: float) -> None:
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+        self.set_rate(rate)
+
+    def set_rate(self, rate: float) -> None:
+        with self._lock:
+            self._interval = 1.0 / rate if rate > 0 else 0.0
+
+    def acquire(self) -> None:
+        with self._lock:
+            if self._interval <= 0:
+                return
+            now = time.monotonic()
+            slot = max(now, self._next_at)
+            self._next_at = slot + self._interval
+        delay = slot - now
+        if delay > 0:
+            time.sleep(delay)
+
+
+# One limiter per process, shared by every Brave provider instance: the quota
+# belongs to the API key, and the MCP server builds a fresh provider per call.
+_BRAVE_LIMITER = RateLimiter(DEFAULT_BRAVE_RATE_LIMIT)
 
 
 class SearchProvider(ABC):
     name = "unknown"
 
     @abstractmethod
-    def _raw_search(self, query: str, limit: int, recency_days: int | None) -> list[dict]:
-        """Return raw provider hits as ``{title, url, snippet}`` dicts."""
+    def _raw_search(
+        self, query: str, limit: int, recency_days: int | None, safesearch: str
+    ) -> list[dict]:
+        """Return raw provider hits as ``{title, url, snippet}`` dicts.
+
+        ``safesearch`` is a validated level; providers without such a filter
+        ignore it.
+        """
 
     def search(
         self,
         query: str,
         limit: int = 10,
         recency_days: int | None = None,
+        safesearch: str | None = None,
     ) -> list[SearchResult]:
-        hits = self._raw_search(query, limit, recency_days)
+        hits = self._raw_search(query, limit, recency_days, normalize_safesearch(safesearch))
         results: list[SearchResult] = []
         for i, hit in enumerate(hits):
             url = hit.get("url", "")
@@ -150,18 +222,28 @@ class SearchProvider(ABC):
 class BraveSearchProvider(SearchProvider):
     name = "brave"
 
-    def __init__(self, api_key: str | None, timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        api_key: str | None,
+        timeout: float = 15.0,
+        *,
+        rate_limit: float = DEFAULT_BRAVE_RATE_LIMIT,
+    ) -> None:
         if not api_key:
             raise SearchError(
                 "Brave Search requires BRAVE_SEARCH_API_KEY to be set."
             )
         self._api_key = api_key
         self._timeout = timeout
+        _BRAVE_LIMITER.set_rate(rate_limit)
 
-    def _raw_search(self, query: str, limit: int, recency_days: int | None) -> list[dict]:
+    def _raw_search(
+        self, query: str, limit: int, recency_days: int | None, safesearch: str
+    ) -> list[dict]:
         params: dict[str, str | int] = {
             "q": query,
             "count": min(max(limit, 1), 20),
+            "safesearch": safesearch,
         }
         if recency_days is not None:
             # Brave supports coarse freshness buckets; map days to the closest.
@@ -170,6 +252,7 @@ class BraveSearchProvider(SearchProvider):
             "Accept": "application/json",
             "X-Subscription-Token": self._api_key,
         }
+        _BRAVE_LIMITER.acquire()
         try:
             resp = httpx.get(
                 BRAVE_ENDPOINT, params=params, headers=headers, timeout=self._timeout
@@ -199,7 +282,10 @@ class TavilySearchProvider(SearchProvider):
         self._api_key = api_key
         self._timeout = timeout
 
-    def _raw_search(self, query: str, limit: int, recency_days: int | None) -> list[dict]:
+    def _raw_search(
+        self, query: str, limit: int, recency_days: int | None, safesearch: str
+    ) -> list[dict]:
+        # Tavily has no safesearch filter; the level is ignored.
         payload = {
             "api_key": self._api_key,
             "query": query,
@@ -230,10 +316,16 @@ def _brave_freshness(recency_days: int) -> str:
     return "py"
 
 
-def get_provider(name: str, *, brave_api_key: str | None, tavily_api_key: str | None) -> SearchProvider:
+def get_provider(
+    name: str,
+    *,
+    brave_api_key: str | None,
+    tavily_api_key: str | None,
+    brave_rate_limit: float = DEFAULT_BRAVE_RATE_LIMIT,
+) -> SearchProvider:
     name = (name or "brave").lower()
     if name == "brave":
-        return BraveSearchProvider(brave_api_key)
+        return BraveSearchProvider(brave_api_key, rate_limit=brave_rate_limit)
     if name == "tavily":
         return TavilySearchProvider(tavily_api_key)
     raise SearchError(f"Unknown search provider: {name!r}")

@@ -64,6 +64,9 @@ class SearchConfig:
     recency_days: int | None = None
     # Extra LLM-written phrasings of the question to search with (0 disables).
     query_variants: int = 3
+    # Max Brave API requests per second, shared process-wide (free tier: 1/s).
+    # 0 disables limiting.
+    brave_rate_limit: float = 1.0
 
 
 @dataclass
@@ -150,6 +153,19 @@ def _int(env_value: str | None, toml_value: object, default: int) -> int:
     return default
 
 
+def _float(env_value: str | None, toml_value: object, default: float) -> float:
+    """First usable float of env override, TOML value, default."""
+
+    for raw in (env_value, toml_value):
+        if raw is None or raw == "":
+            continue
+        try:
+            return float(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
 def _load_toml(path: Path | None) -> dict:
     if path is None:
         for candidate in CONFIG_SEARCH_PATHS:
@@ -180,6 +196,9 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> Config:
         recency_days=search_tbl.get("recency_days"),
         query_variants=_int(
             env.get("REDDIT_RESEARCH_QUERY_VARIANTS"), search_tbl.get("query_variants"), 3
+        ),
+        brave_rate_limit=_float(
+            env.get("REDDIT_RESEARCH_BRAVE_RATE_LIMIT"), search_tbl.get("brave_rate_limit"), 1.0
         ),
     )
 

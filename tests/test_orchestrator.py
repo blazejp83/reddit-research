@@ -10,7 +10,7 @@ from reddit_research.core.orchestrator import Orchestrator
 class FakeProvider:
     name = "fake"
 
-    def search(self, query, limit=10, recency_days=None):
+    def search(self, query, limit=10, recency_days=None, safesearch=None):
         return [
             SearchResult(
                 title="Best homelab backups",
@@ -151,4 +151,29 @@ def test_rerank_model_off_skips_llm_calls(tmp_path, monkeypatch):
     assert route.call_count == 0
     assert result.evidence
     assert not any("llm_" in w or "expansion" in w for w in result.metadata.warnings)
+    orch.close()
+
+
+def test_safesearch_reaches_provider_and_splits_cache(tmp_path):
+    import pytest
+
+    from reddit_research.core.errors import SearchError
+
+    seen = []
+
+    class RecordingProvider(FakeProvider):
+        def search(self, query, limit=10, recency_days=None, safesearch=None):
+            seen.append(safesearch)
+            return super().search(query, limit, recency_days, safesearch)
+
+    orch = _orch(tmp_path)
+    orch._provider = RecordingProvider()
+    orch.config.search.query_variants = 0
+    orch.search("backups")
+    orch.search("backups", safesearch="off")
+    orch.search("backups", safesearch="off")  # cached
+    orch.search("backups", safesearch="moderate")  # cached under the default key
+    assert seen == ["moderate", "off"]
+    with pytest.raises(SearchError):
+        orch.search("backups", safesearch="nope")
     orch.close()

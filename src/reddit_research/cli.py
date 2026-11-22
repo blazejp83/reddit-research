@@ -48,6 +48,10 @@ BackendOpt = Annotated[
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Verbose logging.")]
 DebugOpt = Annotated[bool, typer.Option("--debug", help="Debug logging (implies verbose).")]
 ShowQueriesOpt = Annotated[bool, typer.Option("--show-queries", help="Print planned search queries.")]
+SafesearchOpt = Annotated[
+    str,
+    typer.Option("--safesearch", help="Search safesearch level: off|moderate|strict (Brave only)."),
+]
 
 
 def _err(msg: str) -> None:
@@ -87,13 +91,16 @@ def search(
     config: ConfigOpt = None,
     verbose: VerboseOpt = False,
     show_queries: ShowQueriesOpt = False,
+    safesearch: SafesearchOpt = "moderate",
 ) -> None:
     """Return candidate Reddit threads for a question."""
 
     orch = _make_orchestrator(config)
     try:
         meta = _new_meta()
-        results = orch.search(query, subreddit, limit_threads, since_days, meta=meta)
+        results = orch.search(
+            query, subreddit, limit_threads, since_days, meta=meta, safesearch=safesearch
+        )
         typer.echo(render.render_search(results, fmt))
         _emit_meta(meta, verbose, show_queries)
     except errors.RedditResearchError as exc:
@@ -149,6 +156,7 @@ def evidence(
     config: ConfigOpt = None,
     verbose: VerboseOpt = False,
     show_queries: ShowQueriesOpt = False,
+    safesearch: SafesearchOpt = "moderate",
 ) -> None:
     """Run search + fetch + ranking and emit structured evidence."""
 
@@ -162,6 +170,7 @@ def evidence(
             comment_sort=sort,
             recency_days=since_days,
             max_evidence_items=max_evidence,
+            safesearch=safesearch,
         )
         typer.echo(render.render_evidence(result, fmt))
         _emit_meta(result.metadata, verbose, show_queries)
@@ -187,6 +196,7 @@ def answer(
     config: ConfigOpt = None,
     verbose: VerboseOpt = False,
     show_queries: ShowQueriesOpt = False,
+    safesearch: SafesearchOpt = "moderate",
 ) -> None:
     """Run the full pipeline and optionally synthesize a cited answer."""
 
@@ -201,6 +211,7 @@ def answer(
             recency_days=since_days,
             max_evidence_items=max_evidence,
             include_answer=not no_llm,
+            safesearch=safesearch,
         )
         typer.echo(render.render_answer(result, fmt))
         _emit_meta(result.metadata, verbose, show_queries)

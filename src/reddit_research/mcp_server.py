@@ -42,15 +42,22 @@ def search_reddit_threads(
     subreddits: list[str] | None = None,
     limit: int = 10,
     recency_days: int | None = None,
+    safesearch: str = "moderate",
 ) -> dict[str, Any]:
-    """Find candidate Reddit threads through the configured search provider."""
+    """Find candidate Reddit threads through the configured search provider.
+
+    ``safesearch`` is off | moderate (default) | strict; use ``off`` when the
+    topic is adult/NSFW and moderate filtering hides relevant threads.
+    """
 
     orch = _orchestrator()
     try:
         from .core.models import RunMetadata
 
         meta = RunMetadata()
-        results = orch.search(query, subreddits, limit, recency_days, meta=meta)
+        results = orch.search(
+            query, subreddits, limit, recency_days, meta=meta, safesearch=safesearch
+        )
         return {
             "results": [r.model_dump() for r in results],
             "metadata": meta.model_dump(),
@@ -103,12 +110,15 @@ def answer_from_reddit(
     include_answer: bool = True,
     recency_days: int | None = None,
     comment_sort: str | None = None,
+    safesearch: str = "moderate",
 ) -> dict[str, Any]:
     """Run the full pipeline and optionally synthesize a cited answer.
 
     Set ``recency_days`` for time-sensitive questions (current products, prices,
     software): it limits search to recent threads and favors newer comments.
     ``comment_sort`` is top (default) | new | old | controversial.
+    ``safesearch`` is off | moderate (default) | strict; use ``off`` when the
+    topic is adult/NSFW and moderate filtering hides relevant threads.
     """
 
     orch = _orchestrator()
@@ -121,6 +131,7 @@ def answer_from_reddit(
             include_answer=include_answer,
             recency_days=recency_days,
             comment_sort=comment_sort,
+            safesearch=safesearch,
         )
         return {
             "answer": result.answer,

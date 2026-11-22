@@ -170,3 +170,67 @@ def test_merge_results_empty_and_does_not_mutate_inputs():
     original = _sr("https://www.reddit.com/r/x/comments/aaa111/a/")
     merge_results([[original]])
     assert original.score == 0.5
+
+
+def test_rate_limiter_spaces_calls(monkeypatch):
+    from reddit_research.core import search
+
+    clock = {"now": 100.0}
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(search.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(search.time, "sleep", fake_sleep)
+
+    limiter = search.RateLimiter(2.0)  # 0.5s apart
+    for _ in range(3):
+        limiter.acquire()
+    assert sleeps == [0.5, 0.5]
+
+    clock["now"] += 5  # idle long enough: next call goes straight through
+    limiter.acquire()
+    assert sleeps == [0.5, 0.5]
+
+
+def test_rate_limiter_zero_disables(monkeypatch):
+    from reddit_research.core import search
+
+    monkeypatch.setattr(search.time, "sleep", lambda s: pytest.fail("should not sleep"))
+    limiter = search.RateLimiter(0)
+    for _ in range(5):
+        limiter.acquire()
+
+
+@respx.mock
+def test_brave_sends_per_query_safesearch_and_uses_shared_limiter(monkeypatch):
+    from reddit_research.core import search
+
+    calls = []
+    monkeypatch.setattr(search._BRAVE_LIMITER, "acquire", lambda: calls.append(1))
+    route = respx.get(search.BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"web": {"results": []}})
+    )
+    provider = BraveSearchProvider(api_key="k")
+    provider.search("x", safesearch="OFF")
+    provider.search("y")
+    BraveSearchProvider(api_key="k").search("z", safesearch="strict")
+    params = [c.request.url.params["safesearch"] for c in route.calls]
+    assert params == ["off", "moderate", "strict"]
+    assert len(calls) == 3
+
+
+def test_brave_rejects_bad_safesearch():
+    from reddit_research.core.errors import SearchError
+
+    with pytest.raises(SearchError):
+        BraveSearchProvider(api_key="k").search("x", safesearch="maybe")
+
+
+def test_query_key_safesearch():
+    base = query_key("q", 10, None)
+    assert query_key("q", 10, None, "moderate") == base  # old cache entries still hit
+    assert query_key("q", 10, None, "off") != base
+    assert query_key("q", 10, None, "off") != query_key("q", 10, None, "strict")

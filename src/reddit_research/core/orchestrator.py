@@ -26,7 +26,13 @@ from . import ranking
 from .expand import expand_queries
 from .llm import LLMError
 from .rerank import rerank
-from .search import get_provider, merge_results, plan_queries, query_key
+from .search import (
+    get_provider,
+    merge_results,
+    normalize_safesearch,
+    plan_queries,
+    query_key,
+)
 from .synth import SynthesisError, synthesize
 from .urls import parse_ref
 
@@ -55,6 +61,7 @@ class Orchestrator:
                 self.config.search.provider,
                 brave_api_key=self.config.brave_api_key,
                 tavily_api_key=self.config.tavily_api_key,
+                brave_rate_limit=self.config.search.brave_rate_limit,
             )
         return self._provider
 
@@ -73,7 +80,10 @@ class Orchestrator:
         limit: int | None = None,
         recency_days: int | None = None,
         meta: RunMetadata | None = None,
+        safesearch: str | None = None,
     ) -> list[SearchResult]:
+        # Validate before spending any LLM/search calls on a bad value.
+        safesearch = normalize_safesearch(safesearch)
         limit = limit or self.config.search.default_limit
         recency_days = recency_days if recency_days is not None else self.config.search.recency_days
         meta = meta or RunMetadata()
@@ -83,7 +93,7 @@ class Orchestrator:
 
         result_lists: list[list[SearchResult]] = []
         for q in queries:
-            key = query_key(q, limit, recency_days)
+            key = query_key(q, limit, recency_days, safesearch)
             cached = self.cache.get_search_results(key, self.config.cache.search_ttl_days)
             if cached is not None:
                 meta.cache_hits += 1
@@ -91,7 +101,9 @@ class Orchestrator:
                 continue
             meta.cache_misses += 1
             try:
-                results = self.provider.search(q, limit=limit, recency_days=recency_days)
+                results = self.provider.search(
+                    q, limit=limit, recency_days=recency_days, safesearch=safesearch
+                )
             except errors.SearchError as exc:
                 meta.warnings.append(errors.warning(errors.SEARCH_UNAVAILABLE, str(exc)))
                 result_lists.append([])
@@ -212,10 +224,11 @@ class Orchestrator:
         comment_sort: str | None = None,
         recency_days: int | None = None,
         max_evidence_items: int = 25,
+        safesearch: str | None = None,
     ) -> EvidenceResult:
         meta = RunMetadata()
         candidates = self.search(
-            question, subreddits, limit_threads, recency_days, meta=meta
+            question, subreddits, limit_threads, recency_days, meta=meta, safesearch=safesearch
         )
 
         threads: list[Thread] = []
@@ -251,6 +264,7 @@ class Orchestrator:
         recency_days: int | None = None,
         max_evidence_items: int = 25,
         include_answer: bool = True,
+        safesearch: str | None = None,
     ) -> AnswerResult:
         # The synthesis model reads (and cites by number) the same list we return,
         # so its size comes from config when an answer will be written.
@@ -264,6 +278,7 @@ class Orchestrator:
             comment_sort,
             recency_days,
             max_evidence_items,
+            safesearch=safesearch,
         )
         answer_text: str | None = None
         if include_answer:

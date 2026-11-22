@@ -206,6 +206,17 @@ and a warning says why.
 | `REDDIT_RESEARCH_QUERY_VARIANTS` | `3` | Extra search phrasings per question; results are fused. Each is one more search API call. `0` disables. |
 | `REDDIT_RESEARCH_SYNTH_MODEL` | `claude-sonnet-5-5` | Model that writes the cited answer. |
 
+### Brave Search
+
+| Env var / `[search]` key | Default | Effect |
+| --- | --- | --- |
+| `REDDIT_RESEARCH_BRAVE_RATE_LIMIT` / `brave_rate_limit` | `1` | Max Brave requests per second, shared by all searches in the process (the free tier allows 1/s). Excess calls wait. `0` disables. |
+
+Safesearch is chosen per query: `--safesearch off|moderate|strict` on
+`search`/`evidence`/`answer`, or the `safesearch` argument of the
+`search_reddit_threads` and `answer_from_reddit` MCP tools. The default is
+`moderate` (Brave's own default); Tavily has no such filter and ignores it.
+
 `eval/` holds an offline benchmark for the keyword ranking stage
 (`uv run python eval/run_eval.py --compare eval/baseline_head_b218588.json`);
 see `eval/README.md`.
