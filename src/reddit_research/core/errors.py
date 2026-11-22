@@ -18,6 +18,8 @@ THREAD_UNAVAILABLE = "thread_unavailable"
 COMMENTS_TRUNCATED = "comments_partially_loaded"
 FEW_RESULTS = "too_few_results"
 SYNTH_UNAVAILABLE = "llm_synthesis_unavailable"
+RERANK_UNAVAILABLE = "llm_rerank_unavailable"
+EXPANSION_UNAVAILABLE = "query_expansion_unavailable"
 
 
 class RedditResearchError(Exception):

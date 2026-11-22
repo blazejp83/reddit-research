@@ -31,7 +31,8 @@ def comment_from_dict(d: dict, depth: int | None = None) -> Comment:
     resolved_depth = depth if depth is not None else (raw_depth if raw_depth is not None else 0)
     return Comment(
         id=d.get("id", ""),
-        parent_id=d.get("parent_id"),
+        # Archives occasionally return a numeric parent id; ids are strings to us.
+        parent_id=str(d["parent_id"]) if d.get("parent_id") is not None else None,
         body=body,
         author=str(author) if author else None,
         score=int(d.get("score") or 0),
@@ -39,6 +40,8 @@ def comment_from_dict(d: dict, depth: int | None = None) -> Comment:
         created_utc=d.get("created_utc"),
         permalink=_abs_permalink(d.get("permalink")),
         removed=body in _REMOVED_BODIES,
+        stickied=bool(d.get("stickied") or False),
+        distinguished=str(d.get("distinguished")) if d.get("distinguished") else None,
     )
 
 

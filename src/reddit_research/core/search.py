@@ -14,23 +14,96 @@ import httpx
 
 from .errors import SearchError
 from .models import SearchResult
-from .urls import is_reddit_url, subreddit_from_url
+from .urls import is_reddit_url, parse_ref, subreddit_from_url
 
 BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
 
-def plan_queries(query: str, subreddits: list[str] | None = None) -> list[str]:
+# How many subreddits of an allowlist each query variant is searched in.
+VARIANT_SUBREDDITS = 2
+# RRF damping constant (the conventional value); larger flattens rank differences.
+RRF_K = 60
+# The user's own wording is the best statement of intent, so its results count more.
+ORIGINAL_QUERY_WEIGHT = 1.5
+
+
+def plan_queries(
+    query: str,
+    subreddits: list[str] | None = None,
+    variants: list[str] | None = None,
+) -> list[str]:
     """Build ``site:``-scoped search queries from a question.
 
     With no subreddits, a single ``site:reddit.com`` query is produced. With an
     allowlist, one query per subreddit is produced so each is searched directly.
+
+    ``variants`` are alternative phrasings of the question (see
+    :mod:`.expand`). The original query's searches always come first, followed
+    by each variant's. Without subreddits every variant gets one
+    ``site:reddit.com`` query. With subreddits, the original is still searched
+    in every subreddit but each variant only in the first
+    ``VARIANT_SUBREDDITS`` (2) of the allowlist, so search API usage stays
+    bounded at ``len(subreddits) + 2 * len(variants)`` instead of multiplying.
+    The list is de-duplicated preserving order.
     """
 
-    query = query.strip()
-    if not subreddits:
-        return [f"site:reddit.com {query}"]
-    return [f"site:reddit.com/r/{sub.strip('/ ')} {query}" for sub in subreddits]
+    def scoped(text: str, subs: list[str] | None) -> list[str]:
+        if not subs:
+            return [f"site:reddit.com {text}"]
+        return [f"site:reddit.com/r/{sub.strip('/ ')} {text}" for sub in subs]
+
+    queries = scoped(query.strip(), subreddits)
+    variant_subs = subreddits[:VARIANT_SUBREDDITS] if subreddits else None
+    for variant in variants or []:
+        variant = variant.strip()
+        if variant:
+            queries.extend(scoped(variant, variant_subs))
+    return list(dict.fromkeys(queries))
+
+
+def merge_results(
+    result_lists: list[list[SearchResult]],
+    *,
+    primary_lists: int = 1,
+) -> list[SearchResult]:
+    """Fuse per-query result lists into one ranking (reciprocal rank fusion).
+
+    Each list contributes ``weight / (RRF_K + rank)`` to every thread it
+    contains, so a thread found by several queries outranks one found by a
+    single query at the same rank. The first ``primary_lists`` lists are the
+    original question's results and are weighted ``ORIGINAL_QUERY_WEIGHT``;
+    pass a larger value when the original was fanned out over subreddits.
+
+    Threads are identified by submission id so different URL spellings (www/old
+    hosts, slugs, comment permalinks, redd.it) merge; unparseable URLs fall back
+    to the URL itself. The first-seen title/snippet/url is kept and ``score``
+    becomes the fused score normalized into (0, 1] with the best at 1.0.
+    """
+
+    fused: dict[str, float] = {}
+    first_seen: dict[str, SearchResult] = {}
+    for index, results in enumerate(result_lists):
+        weight = ORIGINAL_QUERY_WEIGHT if index < primary_lists else 1.0
+        counted: set[str] = set()
+        for rank, result in enumerate(results, start=1):
+            ref = parse_ref(result.url)
+            key = ref.submission_id if ref else result.url
+            if key in counted:
+                # Same thread twice in one list: only its best rank counts.
+                continue
+            counted.add(key)
+            fused[key] = fused.get(key, 0.0) + weight / (RRF_K + rank)
+            first_seen.setdefault(key, result)
+    if not fused:
+        return []
+    best = max(fused.values())
+    # sorted() is stable, so ties keep first-seen order.
+    ordered = sorted(fused, key=lambda k: fused[k], reverse=True)
+    return [
+        first_seen[key].model_copy(update={"score": round(fused[key] / best, 4)})
+        for key in ordered
+    ]
 
 
 def query_key(query: str, limit: int, recency_days: int | None) -> str:

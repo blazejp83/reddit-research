@@ -16,13 +16,17 @@ from .fetch_base import Fetcher
 from .fetchers import get_fetcher
 from .models import (
     AnswerResult,
+    Evidence,
     EvidenceResult,
     RunMetadata,
     SearchResult,
     Thread,
 )
 from . import ranking
-from .search import get_provider, plan_queries, query_key
+from .expand import expand_queries
+from .llm import LLMError
+from .rerank import rerank
+from .search import get_provider, merge_results, plan_queries, query_key
 from .synth import SynthesisError, synthesize
 from .urls import parse_ref
 
@@ -73,25 +77,34 @@ class Orchestrator:
         limit = limit or self.config.search.default_limit
         recency_days = recency_days if recency_days is not None else self.config.search.recency_days
         meta = meta or RunMetadata()
-        queries = plan_queries(query, subreddits)
+        variants = self._query_variants(query, meta)
+        queries = plan_queries(query, subreddits, variants)
         meta.search_queries.extend(queries)
 
-        collected: list[SearchResult] = []
+        result_lists: list[list[SearchResult]] = []
         for q in queries:
             key = query_key(q, limit, recency_days)
             cached = self.cache.get_search_results(key, self.config.cache.search_ttl_days)
             if cached is not None:
                 meta.cache_hits += 1
-                collected.extend(cached)
+                result_lists.append(cached)
                 continue
             meta.cache_misses += 1
             try:
                 results = self.provider.search(q, limit=limit, recency_days=recency_days)
             except errors.SearchError as exc:
                 meta.warnings.append(errors.warning(errors.SEARCH_UNAVAILABLE, str(exc)))
+                result_lists.append([])
                 continue
             self.cache.put_search_results(key, results)
-            collected.extend(results)
+            result_lists.append(results)
+
+        if len(result_lists) > 1:
+            # Fuse per-query rankings so threads found by several phrasings rise;
+            # the original question's lists (one per subreddit) weigh more.
+            collected = merge_results(result_lists, primary_lists=max(1, len(subreddits or [])))
+        else:
+            collected = result_lists[0] if result_lists else []
 
         ranked = ranking.rank_threads(query, collected, subreddits)
         if len(ranked) < 3:
@@ -99,6 +112,58 @@ class Orchestrator:
                 errors.warning(errors.FEW_RESULTS, f"Only {len(ranked)} candidate threads found.")
             )
         return ranked[:limit]
+
+    def _query_variants(self, query: str, meta: RunMetadata) -> list[str]:
+        """LLM-written alternative phrasings of the question (empty when off)."""
+
+        n = self.config.search.query_variants
+        model = self.config.rerank.model
+        if n <= 0 or not model or not self.config.synth.llm_enabled:
+            return []
+        try:
+            return expand_queries(query, api_key=self.config.synth.api_key, model=model, n=n)
+        except LLMError as exc:
+            logger.warning("Query expansion failed: %s", exc)
+            meta.warnings.append(
+                errors.warning(
+                    errors.EXPANSION_UNAVAILABLE,
+                    f"searched with the original question only: {exc}",
+                )
+            )
+            return []
+
+    def _rank(
+        self,
+        question: str,
+        threads: list[Thread],
+        n: int,
+        recency_days: int | None,
+        meta: RunMetadata,
+    ) -> list[Evidence]:
+        """Lexical prefilter, then LLM rerank when configured (lexical on failure)."""
+
+        # A recency window signals a time-sensitive question: decay old items faster.
+        half_life = float(max(recency_days, 30)) if recency_days else 365.0
+        model = self.config.rerank.model
+        if not model or not self.config.synth.llm_enabled:
+            return ranking.rank_evidence(question, threads, n, recency_half_life_days=half_life)
+
+        pool = ranking.rank_evidence(
+            question,
+            threads,
+            max(self.config.rerank.candidates, n),
+            recency_half_life_days=half_life,
+        )
+        try:
+            return rerank(
+                question, pool, api_key=self.config.synth.api_key, model=model, top_n=n
+            )
+        except LLMError as exc:
+            logger.warning("LLM rerank failed: %s", exc)
+            meta.warnings.append(
+                errors.warning(errors.RERANK_UNAVAILABLE, f"using keyword ranking: {exc}")
+            )
+            return pool[:n]
 
     def fetch(
         self,
@@ -167,7 +232,7 @@ class Orchestrator:
             except errors.RedditError as exc:
                 meta.warnings.append(errors.warning(errors.THREAD_UNAVAILABLE, str(exc)))
 
-        evidence = ranking.rank_evidence(question, threads, max_evidence_items)
+        evidence = self._rank(question, threads, max_evidence_items, recency_days, meta)
         if not evidence:
             meta.warnings.append(
                 errors.warning(errors.FEW_RESULTS, "No relevant evidence extracted.")
@@ -187,6 +252,10 @@ class Orchestrator:
         max_evidence_items: int = 25,
         include_answer: bool = True,
     ) -> AnswerResult:
+        # The synthesis model reads (and cites by number) the same list we return,
+        # so its size comes from config when an answer will be written.
+        if include_answer and self.config.synth.llm_enabled:
+            max_evidence_items = self.config.synth.max_evidence
         ev = self.evidence(
             question,
             subreddits,

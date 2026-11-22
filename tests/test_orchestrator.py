@@ -1,3 +1,4 @@
+import httpx
 import respx
 
 from reddit_research.core.cache import Cache
@@ -88,4 +89,66 @@ def test_answer_synthesis_failure_reason_in_warning(tmp_path, monkeypatch):
     warn = next(w for w in result.metadata.warnings if "llm_synthesis_unavailable" in w)
     assert "HTTP 404" in warn and "not_found_error" in warn
     assert "sk-test-secretvalue" not in warn
+    orch.close()
+
+
+def _llm_orch(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-secretvalue")
+    orch = _orch(tmp_path)
+    orch.config.synth.provider = "anthropic"
+    orch.config.synth.api_key = "sk-test-secretvalue"
+    return orch
+
+
+def _reply(text):
+    return {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}
+
+
+def test_llm_pipeline_expands_reranks_and_synthesizes(tmp_path, monkeypatch):
+    orch = _llm_orch(tmp_path, monkeypatch)
+    orch.config.synth.max_evidence = 2
+    replies = iter(
+        [
+            _reply('{"queries": ["homelab backup tool", "borg vs restic"]}'),
+            _reply('{"ranked": [3, 1]}'),
+            _reply("## Short answer\nUse borg [1]."),
+        ]
+    )
+    with respx.mock() as router:
+        route = router.post("https://api.anthropic.com/v1/messages").mock(
+            side_effect=lambda request: httpx.Response(200, json=next(replies))
+        )
+        result = orch.answer("backups", include_answer=True)
+    assert route.call_count == 3
+    assert len(result.metadata.search_queries) == 3  # original + 2 variants
+    assert result.answer.startswith("## Short answer")
+    assert len(result.evidence) == 2  # synth.max_evidence drives the list size
+    assert result.evidence[0].score > result.evidence[1].score
+    assert not any("llm_" in w or "expansion" in w for w in result.metadata.warnings)
+    orch.close()
+
+
+def test_llm_failures_degrade_to_keyword_pipeline(tmp_path, monkeypatch):
+    orch = _llm_orch(tmp_path, monkeypatch)
+    with respx.mock() as router:
+        router.post("https://api.anthropic.com/v1/messages").respond(
+            529, json={"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}
+        )
+        result = orch.evidence("backups")
+    assert result.evidence  # keyword ranking still returned
+    codes = " ".join(result.metadata.warnings)
+    assert "query_expansion_unavailable" in codes and "llm_rerank_unavailable" in codes
+    assert "sk-test-secretvalue" not in codes
+    orch.close()
+
+
+def test_rerank_model_off_skips_llm_calls(tmp_path, monkeypatch):
+    orch = _llm_orch(tmp_path, monkeypatch)
+    orch.config.rerank.model = None
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post("https://api.anthropic.com/v1/messages").respond(200, json=_reply("x"))
+        result = orch.evidence("backups")
+    assert route.call_count == 0
+    assert result.evidence
+    assert not any("llm_" in w or "expansion" in w for w in result.metadata.warnings)
     orch.close()

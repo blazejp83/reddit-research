@@ -40,6 +40,10 @@ class Comment(BaseModel):
     permalink: str | None = None
     # True when the comment was deleted or removed (body is a placeholder).
     removed: bool = False
+    # Pinned by a moderator (rules/announcement boilerplate, not an answer).
+    stickied: bool = False
+    # "moderator" / "admin" when posted in an official capacity, else None.
+    distinguished: str | None = None
 
 
 class Thread(BaseModel):
@@ -76,6 +80,13 @@ class Evidence(BaseModel):
     score: float = 0.0
     # Underlying Reddit vote score of the thread/comment.
     reddit_score: int = 0
+    # Parent comment's text (truncated) for replies, so a terse reply can be
+    # read in context. None for threads, top-level comments and orphans.
+    parent_text: str | None = None
+    created_utc: float | None = None
+    # Comment nesting depth (0 = top-level; always 0 for threads).
+    depth: int = 0
+    author: str | None = None
 
 
 class RunMetadata(BaseModel):

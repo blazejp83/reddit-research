@@ -33,3 +33,20 @@ def test_secrets_not_read_from_toml(tmp_path, monkeypatch):
     cfg = load_config(toml)
     assert cfg.reddit.client_secret is None
     assert cfg.reddit.backend == "arctic"
+
+
+def test_llm_tuning_env_vars(monkeypatch):
+    monkeypatch.setattr(config, "DOTENV_SEARCH_PATHS", [])
+    monkeypatch.setenv("REDDIT_RESEARCH_RERANK_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("REDDIT_RESEARCH_RERANK_CANDIDATES", "120")
+    monkeypatch.setenv("REDDIT_RESEARCH_SYNTH_MAX_EVIDENCE", "60")
+    monkeypatch.setenv("REDDIT_RESEARCH_QUERY_VARIANTS", "0")
+    cfg = load_config()
+    assert cfg.rerank.model == "claude-sonnet-5-5"
+    assert (cfg.rerank.candidates, cfg.synth.max_evidence, cfg.search.query_variants) == (120, 60, 0)
+
+    monkeypatch.setenv("REDDIT_RESEARCH_RERANK_MODEL", "off")
+    monkeypatch.setenv("REDDIT_RESEARCH_SYNTH_MAX_EVIDENCE", "not-a-number")
+    cfg = load_config()
+    assert cfg.rerank.model is None
+    assert cfg.synth.max_evidence == 40

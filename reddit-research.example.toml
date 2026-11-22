@@ -5,6 +5,7 @@
 [search]
 provider = "brave"        # "brave" or "tavily"
 default_limit = 10
+# query_variants = 3       # extra LLM-written search queries (0 disables)
 # recency_days = 365       # optional default recency window
 
 [reddit]
@@ -21,3 +22,8 @@ thread_ttl_days = 30
 [synth]
 # provider = "anthropic"  # leave unset to return evidence only
 # model = "claude-sonnet-5-5"
+# max_evidence = 40        # evidence items sent to the synthesis model
+
+[rerank]
+# model = "claude-haiku-5-5"  # "off" = keyword ranking only
+# candidates = 80             # items the reranker chooses from

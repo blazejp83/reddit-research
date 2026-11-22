@@ -124,54 +124,197 @@ def rank_threads(
     return scored
 
 
+# How much of the thread's relevance a comment inherits, by depth. Top-level
+# comments answer the post directly ("Boba U4s."), so they inherit the most;
+# deep replies drift off-topic and must mostly earn relevance themselves.
+_INHERIT_BY_DEPTH = (0.6, 0.35, 0.2)
+_INHERIT_DEEP = 0.1
+# Query words found only in the parent comment count at this fraction.
+PARENT_WEIGHT = 0.5
+PARENT_TEXT_CHARS = 500
+
+# Junk / spam heuristics.
+MIN_BODY_CHARS = 15  # applies to replies; see _is_junk
+MIN_TOP_LEVEL_CHARS = 3
+SHORT_BODY_SCORE_EXEMPT = 10  # a terse but well-voted reply is still an answer
+SPAM_LATE_DAYS = 30.0
+SPAM_LATE_LINK_PENALTY = 0.4
+SPAM_LINK_PENALTY = 0.75
+NEAR_DUPLICATE_JACCARD = 0.8
+
+# "bot" only as a marked suffix (foo_bot, FooBot), so "Abbot"/"talbot" stay human.
+_BOT_AUTHOR_RE = re.compile(r"(?i:^automoderator$)|(?:[-_][Bb][Oo][Tt]|Bot|BOT)$")
+_URL_HOST_RE = re.compile(r"https?://([^/\s)\]>\"']+)", re.IGNORECASE)
+_REDDIT_HOSTS = ("reddit.com", "redd.it", "redditmedia.com", "redditstatic.com")
+# Reference-style sources people cite in good faith; never treated as promo.
+_TRUSTED_HOSTS = (
+    "nih.gov",
+    "doi.org",
+    "wikipedia.org",
+    "wikimedia.org",
+    "pubmed.gov",
+    "cochrane.org",
+    "cochranelibrary.com",
+    "nhs.uk",
+    "who.int",
+    "arxiv.org",
+    "archive.org",
+)
+_TRUSTED_TLD_RE = re.compile(r"\.(gov|edu|mil)(\.[a-z]{2})?$|\.ac\.[a-z]{2}$")
+
+
+def _host_matches(host: str, domains: tuple[str, ...]) -> bool:
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _has_external_link(text: str) -> bool:
+    """True if ``text`` links off-Reddit to something that isn't a reference source."""
+
+    for raw in _URL_HOST_RE.findall(text or ""):
+        host = raw.lower().rsplit("@", 1)[-1].split(":", 1)[0].rstrip(".,")
+        if _host_matches(host, _REDDIT_HOSTS) or _host_matches(host, _TRUSTED_HOSTS):
+            continue
+        if _TRUSTED_TLD_RE.search(host):
+            continue
+        return True
+    return False
+
+
+def _is_junk(c: Comment) -> bool:
+    """Comments that are never evidence: bots, mod stickies, and tiny non-answers."""
+
+    if c.author and _BOT_AUTHOR_RE.search(c.author):
+        return True
+    if c.stickied and c.distinguished:
+        return True
+    # Short replies are mostly "Thanks!"; a short top-level comment is often a
+    # bare product name, which is a real answer in recommendation threads.
+    min_chars = MIN_TOP_LEVEL_CHARS if c.depth == 0 else MIN_BODY_CHARS
+    if len(c.body.strip()) < min_chars and c.score < SHORT_BODY_SCORE_EXEMPT:
+        return True
+    return False
+
+
+def _spam_penalty(c: Comment, thread_created_utc: float | None) -> float:
+    """Multiplier in (0, 1] for likely SEO/promo comments.
+
+    An unvoted comment carrying an off-site link is suspicious; one that also
+    arrived weeks after the thread went quiet is the classic "necro-post a
+    product link for search traffic" pattern. It's a penalty rather than a drop
+    because late, helpful, linked answers do exist.
+    """
+
+    if c.score > 1 or not _has_external_link(c.body):
+        return 1.0
+    if (
+        c.created_utc
+        and thread_created_utc
+        and c.created_utc - thread_created_utc > SPAM_LATE_DAYS * 86400
+    ):
+        return SPAM_LATE_LINK_PENALTY
+    return SPAM_LINK_PENALTY
+
+
+def _inherit_weight(depth: int) -> float:
+    if depth < len(_INHERIT_BY_DEPTH):
+        return _INHERIT_BY_DEPTH[max(depth, 0)]
+    return _INHERIT_DEEP
+
+
+def _own_overlap(query_tokens: Counter[str], body: str, parent_text: str | None) -> float:
+    """Overlap of the comment itself, crediting query words in its parent at reduced weight.
+
+    A reply like "Clicky. Try whites." only makes sense next to the comment it
+    answers, so the parent's wording counts toward it (but less than its own).
+    """
+
+    own = _overlap(query_tokens, body)
+    if not parent_text:
+        return own
+    with_parent = _overlap(query_tokens, f"{body} {parent_text}")
+    return own + PARENT_WEIGHT * (with_parent - own)
+
+
+def _parent_of(c: Comment, by_id: dict[str, Comment]) -> Comment | None:
+    """The parent comment, if it is a usable comment in the fetched set."""
+
+    pid = c.parent_id or ""
+    if pid.startswith("t3_"):
+        return None
+    parent = by_id.get(pid[3:] if pid.startswith("t1_") else pid)
+    if parent is None or parent is c or parent.removed or not parent.body:
+        return None
+    return parent
+
+
 def rank_evidence(
     question: str,
     threads: list[Thread],
     max_evidence_items: int = 25,
     include_threads: bool = True,
+    *,
+    max_per_thread: int | None = None,
+    recency_half_life_days: float = 365.0,
 ) -> list[Evidence]:
-    """Rank thread bodies and comments into a flat, cited evidence list."""
+    """Rank thread bodies and comments into a flat, cited evidence list.
+
+    ``max_per_thread`` caps how many items one thread may contribute so a single
+    big thread can't crowd out the others; ``None`` means ~60% of
+    ``max_evidence_items`` (at least 3) with 2+ threads, and no cap for one.
+    """
 
     qtokens = Counter(tokenize(question))
     now = time.time()
     items: list[Evidence] = []
 
     for thread in threads:
-        if include_threads:
-            body = f"{thread.title}\n{thread.selftext}".strip()
-            lexical = _overlap(qtokens, body)
-            if lexical > 0:
-                combined = (
-                    W_LEXICAL * lexical
-                    + W_POPULARITY * _popularity(thread.score)
-                    + W_RECENCY * _recency(thread.created_utc, now)
+        # A comment in an on-topic thread is on-topic by context even when it
+        # shares no words with the question (e.g. a bare product name).
+        thread_relevance = _overlap(qtokens, f"{thread.title}\n{thread.selftext}")
+        if include_threads and thread_relevance > 0:
+            combined = (
+                W_LEXICAL * thread_relevance
+                + W_POPULARITY * _popularity(thread.score)
+                + W_RECENCY * _recency(thread.created_utc, now, recency_half_life_days)
+            )
+            items.append(
+                Evidence(
+                    kind="thread",
+                    thread_id=thread.id,
+                    thread_title=thread.title,
+                    subreddit=thread.subreddit,
+                    text=(thread.selftext or thread.title)[:2000],
+                    permalink=thread.permalink,
+                    score=round(min(1.0, combined), 4),
+                    reddit_score=thread.score,
+                    created_utc=thread.created_utc,
+                    author=thread.author,
                 )
-                items.append(
-                    Evidence(
-                        kind="thread",
-                        thread_id=thread.id,
-                        thread_title=thread.title,
-                        subreddit=thread.subreddit,
-                        text=(thread.selftext or thread.title)[:2000],
-                        permalink=thread.permalink,
-                        score=round(min(1.0, combined), 4),
-                        reddit_score=thread.score,
-                    )
-                )
+            )
 
+        by_id = {c.id: c for c in thread.comments if c.id}
         thread_max = max((c.score for c in thread.comments if not c.removed), default=0)
         for c in thread.comments:
-            if c.removed or not c.body:
+            if c.removed or not c.body or _is_junk(c):
                 continue
-            lexical = _overlap(qtokens, c.body)
+            parent = _parent_of(c, by_id)
+            parent_text = parent.body if parent else None
+            own = _own_overlap(qtokens, c.body, parent_text)
+            # Own overlap always counts in full; thread relevance fills part of
+            # the remaining gap, so inheriting never lowers a matching comment.
+            lexical = own + _inherit_weight(c.depth) * thread_relevance * (1.0 - own)
             if lexical <= 0:
                 continue
             depth_penalty = 1.0 / (1.0 + 0.35 * c.depth)
             combined = (
-                W_LEXICAL * lexical
-                + W_POPULARITY * _comment_popularity(c.score, thread_max)
-                + W_RECENCY * _recency(c.created_utc, now)
-            ) * depth_penalty
+                (
+                    W_LEXICAL * lexical
+                    + W_POPULARITY * _comment_popularity(c.score, thread_max)
+                    + W_RECENCY * _recency(c.created_utc, now, recency_half_life_days)
+                )
+                * depth_penalty
+                * _spam_penalty(c, thread.created_utc)
+            )
             items.append(
                 Evidence(
                     kind="comment",
@@ -182,26 +325,58 @@ def rank_evidence(
                     permalink=c.permalink or thread.permalink,
                     score=round(min(1.0, combined), 4),
                     reddit_score=c.score,
+                    parent_text=parent_text[:PARENT_TEXT_CHARS] if parent_text else None,
+                    created_utc=c.created_utc,
+                    depth=c.depth,
+                    author=c.author,
                 )
             )
 
     items.sort(key=lambda x: x.score, reverse=True)
-    return _dedupe(items)[:max_evidence_items]
+    items = _dedupe(items)
+    if max_per_thread is None and len(threads) >= 2:
+        max_per_thread = max(3, round(0.6 * max_evidence_items))
+    if max_per_thread is not None:
+        items = _cap_per_thread(items, max_per_thread)
+    return items[:max_evidence_items]
+
+
+def _cap_per_thread(items: list[Evidence], max_per_thread: int) -> list[Evidence]:
+    """Keep at most ``max_per_thread`` items per thread, preserving rank order."""
+
+    counts: Counter[str] = Counter()
+    out: list[Evidence] = []
+    for ev in items:
+        if counts[ev.thread_id] >= max_per_thread:
+            continue
+        counts[ev.thread_id] += 1
+        out.append(ev)
+    return out
 
 
 def _dedupe(items: list[Evidence]) -> list[Evidence]:
     """Drop repeated text (double-posts, copy-paste spam), keeping the best-ranked.
 
-    ``items`` must already be sorted best-first. Text is compared after folding
-    case, punctuation and whitespace, so trivially-different copies collapse.
+    ``items`` must already be sorted best-first. Texts are compared as token
+    sets (case, punctuation and whitespace folded) and count as duplicates at
+    Jaccard similarity >= ``NEAR_DUPLICATE_JACCARD``, so lightly reworded copies
+    collapse too. Quadratic, which is fine for the few hundred items we rank.
     """
 
-    seen: set[str] = set()
+    kept: list[frozenset[str]] = []
     out: list[Evidence] = []
     for ev in items:
-        key = " ".join(_TOKEN_RE.findall(ev.text.lower()))
-        if key and key in seen:
+        tokens = frozenset(_TOKEN_RE.findall(ev.text.lower()))
+        if tokens and any(_jaccard(tokens, other) >= NEAR_DUPLICATE_JACCARD for other in kept):
             continue
-        seen.add(key)
+        if tokens:
+            kept.append(tokens)
         out.append(ev)
     return out
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    # Cheap size bound first: very different lengths can't reach the threshold.
+    if min(len(a), len(b)) < NEAR_DUPLICATE_JACCARD * max(len(a), len(b)):
+        return 0.0
+    return len(a & b) / len(a | b)

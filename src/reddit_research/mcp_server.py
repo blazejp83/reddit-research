@@ -101,8 +101,15 @@ def answer_from_reddit(
     limit_threads: int = 8,
     max_comments_per_thread: int = 250,
     include_answer: bool = True,
+    recency_days: int | None = None,
+    comment_sort: str | None = None,
 ) -> dict[str, Any]:
-    """Run the full pipeline and optionally synthesize a cited answer."""
+    """Run the full pipeline and optionally synthesize a cited answer.
+
+    Set ``recency_days`` for time-sensitive questions (current products, prices,
+    software): it limits search to recent threads and favors newer comments.
+    ``comment_sort`` is top (default) | new | old | controversial.
+    """
 
     orch = _orchestrator()
     try:
@@ -112,6 +119,8 @@ def answer_from_reddit(
             limit_threads=limit_threads,
             max_comments_per_thread=max_comments_per_thread,
             include_answer=include_answer,
+            recency_days=recency_days,
+            comment_sort=comment_sort,
         )
         return {
             "answer": result.answer,

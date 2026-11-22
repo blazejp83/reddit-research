@@ -192,6 +192,24 @@ Package layout under `src/reddit_research/`:
 | `core/orchestrator.py` | Pipeline + run metadata/warnings |
 | `cli.py` / `mcp_server.py` | Interfaces |
 
+## Relevance tuning
+
+With synthesis enabled (provider + key), two extra LLM steps improve what gets
+retrieved. Both degrade gracefully: on any failure the keyword result is used
+and a warning says why.
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `REDDIT_RESEARCH_RERANK_MODEL` | `claude-haiku-5-5` | Model that reorders evidence by how well it answers the question, and writes query variants. `off` disables both. |
+| `REDDIT_RESEARCH_RERANK_CANDIDATES` | `80` | Keyword-prefiltered items the reranker chooses from. |
+| `REDDIT_RESEARCH_SYNTH_MAX_EVIDENCE` | `40` | Evidence items sent to the synthesis model (also the size of the returned list when an answer is written). |
+| `REDDIT_RESEARCH_QUERY_VARIANTS` | `3` | Extra search phrasings per question; results are fused. Each is one more search API call. `0` disables. |
+| `REDDIT_RESEARCH_SYNTH_MODEL` | `claude-sonnet-5-5` | Model that writes the cited answer. |
+
+`eval/` holds an offline benchmark for the keyword ranking stage
+(`uv run python eval/run_eval.py --compare eval/baseline_head_b218588.json`);
+see `eval/README.md`.
+
 ## Develop
 
 ```bash
